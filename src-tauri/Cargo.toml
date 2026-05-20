@@ -1,9 +1,10 @@
 [package]
 name = "doicheck"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Check the DOIs in a document's bibliography against Crossref"
+authors = ["Stephan Hügel"]
 edition = "2021"
+license = "BlueOak-1.0.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
