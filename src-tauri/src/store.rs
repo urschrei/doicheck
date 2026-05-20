@@ -86,6 +86,12 @@ impl Store {
                 json TEXT NOT NULL,
                 fetched_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS dismissals (
+                fingerprint TEXT NOT NULL,
+                doi TEXT NOT NULL,
+                field TEXT NOT NULL,
+                PRIMARY KEY (fingerprint, doi, field)
+            );
             "#,
         )?;
         let has_result_json: bool = self.conn.query_row(
@@ -241,6 +247,46 @@ impl Store {
         Ok(check_id)
     }
 
+    pub fn add_dismissal(
+        &self,
+        fingerprint: &str,
+        doi: &str,
+        field: &str,
+    ) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO dismissals(fingerprint, doi, field) VALUES(?1, ?2, ?3)",
+            params![fingerprint, doi, field],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_dismissal(
+        &self,
+        fingerprint: &str,
+        doi: &str,
+        field: &str,
+    ) -> Result<(), StoreError> {
+        self.conn.execute(
+            "DELETE FROM dismissals WHERE fingerprint = ?1 AND doi = ?2 AND field = ?3",
+            params![fingerprint, doi, field],
+        )?;
+        Ok(())
+    }
+
+    pub fn dismissals_for(
+        &self,
+        fingerprint: &str,
+    ) -> Result<std::collections::HashSet<(String, String)>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT doi, field FROM dismissals WHERE fingerprint = ?1")?;
+        let rows = stmt.query_map(params![fingerprint], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        rows.collect::<Result<std::collections::HashSet<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
     /// The most recent report text for a document, by fingerprint.
     pub fn latest_report(&self, fingerprint: &str) -> Result<Option<String>, StoreError> {
         let mut stmt = self.conn.prepare(
@@ -258,6 +304,7 @@ impl Store {
     }
 
     /// The most recent structured result for a document, by fingerprint.
+    /// Dismissals are applied before returning, so callers always see annotated results.
     pub fn latest_result(
         &self,
         fingerprint: &str,
@@ -272,7 +319,14 @@ impl Store {
         match rows.next()? {
             Some(row) => {
                 let json: String = row.get(0)?;
-                Ok(serde_json::from_str(&json).ok())
+                match serde_json::from_str::<crate::model::CheckResult>(&json) {
+                    Ok(mut result) => {
+                        let set = self.dismissals_for(fingerprint)?;
+                        result.apply_dismissals(&set);
+                        Ok(Some(result))
+                    }
+                    Err(_) => Ok(None),
+                }
             }
             None => Ok(None),
         }
@@ -323,28 +377,44 @@ impl Store {
     }
 
     /// Sidebar list: one row per document with its latest status.
+    /// Status is derived from the dismissal-annotated latest result so that
+    /// dismissing all mismatches on a document turns it green.
     pub fn list_documents(&self) -> Result<Vec<DocumentSummary>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT d.fingerprint, d.filename, d.last_checked,
-                 (SELECT CASE
-                    WHEN c.network_failed > 0 THEN 'incomplete'
-                    WHEN c.with_discrepancies > 0 OR c.unresolved > 0 THEN 'has-issues'
-                    ELSE 'clean' END
-                  FROM checks c WHERE c.document_id = d.id ORDER BY c.id DESC LIMIT 1)
-             FROM documents d ORDER BY d.last_checked DESC",
+            "SELECT fingerprint, filename, last_checked FROM documents ORDER BY last_checked DESC",
         )?;
         let rows = stmt.query_map([], |r| {
-            Ok(DocumentSummary {
-                fingerprint: r.get(0)?,
-                filename: r.get(1)?,
-                last_checked: r.get(2)?,
-                status: r
-                    .get::<_, Option<String>>(3)?
-                    .unwrap_or_else(|| "clean".into()),
-            })
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
         })?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(StoreError::from)
+        let docs: Vec<(String, String, String)> = rows.collect::<Result<Vec<_>, _>>()?;
+        let mut out = Vec::with_capacity(docs.len());
+        for (fingerprint, filename, last_checked) in docs {
+            let status = match self.latest_result(&fingerprint)? {
+                Some(result) => {
+                    let c = result.counts();
+                    if c.network_failed > 0 {
+                        "incomplete"
+                    } else if c.with_discrepancies > 0 || c.unresolved > 0 {
+                        "has-issues"
+                    } else {
+                        "clean"
+                    }
+                }
+                None => "clean",
+            }
+            .to_string();
+            out.push(DocumentSummary {
+                fingerprint,
+                filename,
+                last_checked,
+                status,
+            });
+        }
+        Ok(out)
     }
 }
 
@@ -371,6 +441,7 @@ mod tests {
                         field: "year".into(),
                         reference_value: "(year not found)".into(),
                         crossref_value: "2020".into(),
+                        dismissed: false,
                     }],
                     from_cache: false,
                 },
@@ -479,5 +550,23 @@ mod tests {
         // Reopen: migrate must run again without error and data persists.
         let s = Store::open(&path).unwrap();
         assert!(s.latest_result("sha256:aaa").unwrap().is_some());
+    }
+
+    #[test]
+    fn dismissal_clears_issue_and_status() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.save_check(&sample(), "pdf", "T").unwrap();
+        // sample() has one resolved entry with a 'year' discrepancy on DOI 10.1/a.
+        assert_eq!(store.list_documents().unwrap()[0].status, "has-issues");
+        store.add_dismissal("sha256:aaa", "10.1/a", "year").unwrap();
+        let r = store.latest_result("sha256:aaa").unwrap().unwrap();
+        // The discrepancy is now annotated dismissed, so no active issues.
+        assert_eq!(r.counts().with_discrepancies, 0);
+        assert_eq!(r.counts().dismissed, 1);
+        assert_eq!(store.list_documents().unwrap()[0].status, "clean");
+        store
+            .remove_dismissal("sha256:aaa", "10.1/a", "year")
+            .unwrap();
+        assert_eq!(store.list_documents().unwrap()[0].status, "has-issues");
     }
 }

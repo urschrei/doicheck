@@ -45,6 +45,8 @@ pub fn run() {
             commands::check_document,
             commands::recheck_failures,
             commands::export_report,
+            commands::dismiss_discrepancy,
+            commands::undismiss_discrepancy,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

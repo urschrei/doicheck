@@ -26,6 +26,7 @@ pub fn compare(reference: &str, meta: &Metadata) -> Vec<Discrepancy> {
                 field: "title".into(),
                 reference_value: "(title not found in reference)".into(),
                 crossref_value: title.to_string(),
+                dismissed: false,
             });
         }
     }
@@ -40,6 +41,7 @@ pub fn compare(reference: &str, meta: &Metadata) -> Vec<Discrepancy> {
                 field: "author".into(),
                 reference_value: "(first author not found in reference)".into(),
                 crossref_value: surname.to_string(),
+                dismissed: false,
             });
         }
     }
@@ -50,6 +52,7 @@ pub fn compare(reference: &str, meta: &Metadata) -> Vec<Discrepancy> {
                 field: "year".into(),
                 reference_value: "(year not found in reference)".into(),
                 crossref_value: year.to_string(),
+                dismissed: false,
             });
         }
     }
@@ -60,6 +63,7 @@ pub fn compare(reference: &str, meta: &Metadata) -> Vec<Discrepancy> {
                 field: "container".into(),
                 reference_value: "(journal/container not found in reference)".into(),
                 crossref_value: container.to_string(),
+                dismissed: false,
             });
         }
     }

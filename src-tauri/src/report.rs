@@ -30,6 +30,7 @@ pub fn render(result: &CheckResult) -> String {
     );
     let _ = writeln!(s, "  Not resolved:                {}", c.unresolved);
     let _ = writeln!(s, "  Entries with discrepancies:  {}", c.with_discrepancies);
+    let _ = writeln!(s, "  Dismissed (false positives): {}", c.dismissed);
     let _ = writeln!(
         s,
         "  No-DOI entries flagged:      {}",
@@ -43,9 +44,9 @@ pub fn render(result: &CheckResult) -> String {
         match &e.outcome {
             EntryOutcome::Resolved {
                 doi, discrepancies, ..
-            } if !discrepancies.is_empty() => {
+            } if discrepancies.iter().any(|d| !d.dismissed) => {
                 any_disc = true;
-                for d in discrepancies {
+                for d in discrepancies.iter().filter(|d| !d.dismissed) {
                     let _ = writeln!(
                         s,
                         "  [{}] {}  {}: ref {} vs Crossref \"{}\"",
@@ -117,6 +118,7 @@ mod tests {
                             field: "title".into(),
                             reference_value: "(title not found in reference)".into(),
                             crossref_value: "Neural Things".into(),
+                            dismissed: false,
                         }],
                         from_cache: false,
                     },

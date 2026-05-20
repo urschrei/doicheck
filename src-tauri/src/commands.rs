@@ -113,6 +113,15 @@ pub async fn check_document(
             .save_check(&result, kind, &report_text)
             .map_err(map_err)?;
     }
+    {
+        let store = state.store.lock().map_err(|e| e.to_string())?;
+        if let Some(annotated) = store
+            .latest_result(&ingested.fingerprint)
+            .map_err(map_err)?
+        {
+            return Ok(annotated);
+        }
+    }
     Ok(result)
 }
 
@@ -175,10 +184,13 @@ pub fn export_report(
 ) -> Result<(), String> {
     let store = state.store.lock().map_err(|e| e.to_string())?;
     let content = match format.as_str() {
-        "txt" => store
-            .latest_report(&fingerprint)
-            .map_err(map_err)?
-            .ok_or_else(|| "no report stored for this document".to_string())?,
+        "txt" => {
+            let r = store
+                .latest_result(&fingerprint)
+                .map_err(map_err)?
+                .ok_or_else(|| "no result stored for this document".to_string())?;
+            crate::report::render(&r)
+        }
         "json" => {
             let r = store
                 .latest_result(&fingerprint)
@@ -196,6 +208,32 @@ pub fn export_report(
         other => return Err(format!("unknown export format: {other}")),
     };
     std::fs::write(&path, content).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn dismiss_discrepancy(
+    state: State<'_, AppState>,
+    fingerprint: String,
+    doi: String,
+    field: String,
+) -> Result<(), String> {
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    store
+        .add_dismissal(&fingerprint, &doi, &field)
+        .map_err(map_err)
+}
+
+#[tauri::command]
+pub fn undismiss_discrepancy(
+    state: State<'_, AppState>,
+    fingerprint: String,
+    doi: String,
+    field: String,
+) -> Result<(), String> {
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    store
+        .remove_dismissal(&fingerprint, &doi, &field)
+        .map_err(map_err)
 }
 
 /// Remove a document and its checks from the database. The shared DOI cache is

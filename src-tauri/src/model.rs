@@ -22,6 +22,8 @@ pub struct Discrepancy {
     pub field: String,
     pub reference_value: String,
     pub crossref_value: String,
+    #[serde(default)]
+    pub dismissed: bool,
 }
 
 /// A DOI suggested for an entry that had none, found by title search.
@@ -62,6 +64,7 @@ pub struct Counts {
     pub from_cache: usize,
     pub unresolved: usize,
     pub with_discrepancies: usize,
+    pub dismissed: usize,
     pub missing_doi_flagged: usize,
     pub network_failed: usize,
 }
@@ -85,6 +88,20 @@ pub struct Progress {
 }
 
 impl CheckResult {
+    /// Mark discrepancies dismissed where (resolved DOI, field) is in `set`.
+    pub fn apply_dismissals(&mut self, set: &std::collections::HashSet<(String, String)>) {
+        for ce in &mut self.entries {
+            if let EntryOutcome::Resolved {
+                doi, discrepancies, ..
+            } = &mut ce.outcome
+            {
+                for d in discrepancies.iter_mut() {
+                    d.dismissed = set.contains(&(doi.clone(), d.field.clone()));
+                }
+            }
+        }
+    }
+
     pub fn counts(&self) -> Counts {
         let mut c = Counts {
             total: self.entries.len(),
@@ -99,9 +116,11 @@ impl CheckResult {
                 } => {
                     c.checkable += 1;
                     c.resolved += 1;
-                    if !discrepancies.is_empty() {
+                    let active = discrepancies.iter().filter(|d| !d.dismissed).count();
+                    if active > 0 {
                         c.with_discrepancies += 1;
                     }
+                    c.dismissed += discrepancies.len() - active;
                     if *from_cache {
                         c.from_cache += 1;
                     }
@@ -160,6 +179,7 @@ mod tests {
                             field: "title".into(),
                             reference_value: "r".into(),
                             crossref_value: "c".into(),
+                            dismissed: false,
                         }],
                         from_cache: false,
                     },

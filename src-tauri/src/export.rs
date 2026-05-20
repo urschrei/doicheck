@@ -12,18 +12,22 @@ pub fn to_csv(result: &CheckResult) -> String {
     let mut out = String::from("ordinal,doi,status,unmatched_fields,suggested_doi\n");
     for e in &result.entries {
         let (status, unmatched, suggested) = match &e.outcome {
-            EntryOutcome::Resolved { discrepancies, .. } if discrepancies.is_empty() => {
-                ("clean".to_string(), String::new(), String::new())
+            EntryOutcome::Resolved { discrepancies, .. } => {
+                let active: Vec<_> = discrepancies.iter().filter(|d| !d.dismissed).collect();
+                if active.is_empty() {
+                    ("clean".to_string(), String::new(), String::new())
+                } else {
+                    (
+                        "mismatch".to_string(),
+                        active
+                            .iter()
+                            .map(|d| d.field.as_str())
+                            .collect::<Vec<_>>()
+                            .join("; "),
+                        String::new(),
+                    )
+                }
             }
-            EntryOutcome::Resolved { discrepancies, .. } => (
-                "mismatch".to_string(),
-                discrepancies
-                    .iter()
-                    .map(|d| d.field.as_str())
-                    .collect::<Vec<_>>()
-                    .join("; "),
-                String::new(),
-            ),
             EntryOutcome::Unresolved { network_error, .. } => (
                 if *network_error {
                     "network_error"
@@ -100,6 +104,7 @@ mod tests {
                             field: "year".into(),
                             reference_value: "x".into(),
                             crossref_value: "2020".into(),
+                            dismissed: false,
                         }],
                         from_cache: false,
                     },
