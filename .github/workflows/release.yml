@@ -24,6 +24,24 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Free disk space (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $before = (Get-PSDrive C).Free / 1GB
+          $targets = @(
+            "C:\Android",
+            "C:\Program Files (x86)\Android",
+            "C:\Program Files\Microsoft SDKs\Azure",
+            "C:\Program Files (x86)\Microsoft SDKs\Azure",
+            "$env:AGENT_TOOLSDIRECTORY\CodeQL"
+          )
+          foreach ($t in $targets) {
+            if ($t -and (Test-Path $t)) { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $t }
+          }
+          $after = (Get-PSDrive C).Free / 1GB
+          Write-Host ("C: free: {0:N1} GB -> {1:N1} GB" -f $before, $after)
+
       - uses: actions/setup-node@v6
         with:
           node-version: 22
