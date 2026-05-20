@@ -5,6 +5,7 @@ pub mod commands;
 pub mod compare;
 pub mod crossref;
 pub mod doi;
+pub mod export;
 pub mod extract;
 pub mod ingest;
 pub mod model;

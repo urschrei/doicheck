@@ -1,0 +1,141 @@
+//! Machine-readable exports of a CheckResult: full JSON and a flat CSV.
+
+use crate::model::{CheckResult, EntryOutcome};
+
+/// Lossless JSON of the whole result.
+pub fn to_json(result: &CheckResult) -> String {
+    serde_json::to_string_pretty(result).unwrap_or_default()
+}
+
+/// One row per entry: ordinal, doi, status, unmatched fields, suggested doi.
+pub fn to_csv(result: &CheckResult) -> String {
+    let mut out = String::from("ordinal,doi,status,unmatched_fields,suggested_doi\n");
+    for e in &result.entries {
+        let (status, unmatched, suggested) = match &e.outcome {
+            EntryOutcome::Resolved { discrepancies, .. } if discrepancies.is_empty() => {
+                ("clean".to_string(), String::new(), String::new())
+            }
+            EntryOutcome::Resolved { discrepancies, .. } => (
+                "mismatch".to_string(),
+                discrepancies
+                    .iter()
+                    .map(|d| d.field.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; "),
+                String::new(),
+            ),
+            EntryOutcome::Unresolved { network_error, .. } => (
+                if *network_error {
+                    "network_error"
+                } else {
+                    "not_found"
+                }
+                .to_string(),
+                String::new(),
+                String::new(),
+            ),
+            EntryOutcome::NoDoi { suggested } => (
+                "no_doi".to_string(),
+                String::new(),
+                suggested
+                    .as_ref()
+                    .map(|s| s.doi.clone())
+                    .unwrap_or_default(),
+            ),
+        };
+        out.push_str(&format!(
+            "{},{},{},{},{}\n",
+            e.entry.ordinal,
+            csv_field(e.entry.doi.as_deref().unwrap_or("")),
+            status,
+            csv_field(&unmatched),
+            csv_field(&suggested),
+        ));
+    }
+    out
+}
+
+/// Quote a CSV field if it contains a comma, quote, or newline.
+fn csv_field(s: &str) -> String {
+    if s.contains([',', '"', '\n']) {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{CheckedEntry, Discrepancy, ReferenceEntry, SuggestedDoi};
+
+    fn result() -> CheckResult {
+        CheckResult {
+            filename: "a.pdf".into(),
+            fingerprint: "fp".into(),
+            run_at: "now".into(),
+            bibliography_detected: true,
+            entries: vec![
+                CheckedEntry {
+                    entry: ReferenceEntry {
+                        ordinal: 1,
+                        raw_text: "r".into(),
+                        doi: Some("10.1000/a".into()),
+                    },
+                    outcome: EntryOutcome::Resolved {
+                        doi: "10.1000/a".into(),
+                        discrepancies: vec![],
+                    },
+                },
+                CheckedEntry {
+                    entry: ReferenceEntry {
+                        ordinal: 2,
+                        raw_text: "r".into(),
+                        doi: Some("10.1000/b".into()),
+                    },
+                    outcome: EntryOutcome::Resolved {
+                        doi: "10.1000/b".into(),
+                        discrepancies: vec![Discrepancy {
+                            field: "year".into(),
+                            reference_value: "x".into(),
+                            crossref_value: "2020".into(),
+                        }],
+                    },
+                },
+                CheckedEntry {
+                    entry: ReferenceEntry {
+                        ordinal: 3,
+                        raw_text: "r".into(),
+                        doi: None,
+                    },
+                    outcome: EntryOutcome::NoDoi {
+                        suggested: Some(SuggestedDoi {
+                            doi: "10.1000/c".into(),
+                            title_match: 90,
+                        }),
+                    },
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn csv_has_header_and_rows() {
+        let csv = to_csv(&result());
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(
+            lines[0],
+            "ordinal,doi,status,unmatched_fields,suggested_doi"
+        );
+        assert_eq!(lines[1], "1,10.1000/a,clean,,");
+        assert_eq!(lines[2], "2,10.1000/b,mismatch,year,");
+        assert_eq!(lines[3], "3,,no_doi,,10.1000/c");
+    }
+
+    #[test]
+    fn json_round_trips() {
+        let json = to_json(&result());
+        let back: CheckResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, result());
+    }
+}
