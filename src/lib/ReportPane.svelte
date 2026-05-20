@@ -1,7 +1,7 @@
 <script>
   import { save, open } from "@tauri-apps/plugin-dialog";
   import { exportReport, getReportsDir, setReportsDir } from "$lib/api.js";
-  import { classify, SEVERITY } from "$lib/result.js";
+  import { classify, SEVERITY, cacheTally } from "$lib/result.js";
   import EntryCard from "$lib/EntryCard.svelte";
 
   let { result = null, busy = false, progress = null, currentPath = "", onopen, onrecheck, onrecheckfailures } = $props();
@@ -28,6 +28,7 @@
   );
   const cleanOnes = $derived(classified.filter((x) => x.kind === "clean"));
   const totalIssues = $derived(classified.filter((x) => x.kind !== "clean").length);
+  const tally = $derived(cacheTally(result));
 
   function matchesFilter(kind, f) {
     if (f === "unresolved") return kind === "unresolved" || kind === "network";
@@ -81,7 +82,7 @@
 </div>
 
 {#if busy}
-  <p class="progress">{progress ? `Checking ${progress.done} of ${progress.total}...` : "Working..."}</p>
+  <p class="progress">{progress ? `Checking ${progress.done} of ${progress.total} — ${progress.cached} cached, ${progress.fetched} fetched` : "Working..."}</p>
 {/if}
 
 {#if result}
@@ -92,6 +93,9 @@
     <button class:active={filter === "no_doi"} onclick={() => (filter = "no_doi")}>No DOI {counts.no_doi + counts.no_doi_suggested}</button>
     <input placeholder="Search..." bind:value={query} />
   </div>
+  {#if tally.cached + tally.fetched > 0}
+    <p class="tally">Resolved: {tally.cached} from cache, {tally.fetched} from Crossref</p>
+  {/if}
   {#if counts.network > 0}
     <p class="warn">{counts.network} entr{counts.network === 1 ? "y" : "ies"} couldn't be checked (network or capacity). Use "Re-check failures" when you're back online; everything already resolved is cached.</p>
   {/if}
@@ -139,6 +143,7 @@
   .clean-toggle { background: #f4faf5; color: #1a7f37; border: 1px solid #d6ecd9; border-radius: 6px; width: 100%; text-align: left; padding: 6px 10px; }
   .empty { color: #888; border: 2px dashed #ccc; border-radius: 8px; padding: 32px; text-align: center; }
   .note { color: #888; }
+  .tally { color: #555; font-size: 12px; margin: 0 0 8px; }
   .warn { color: #9a6700; background: #fffaf0; border: 1px solid #f0e0b0; border-radius: 6px; padding: 6px 10px; }
   .progress { color: #555; }
 </style>

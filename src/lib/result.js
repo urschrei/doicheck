@@ -34,3 +34,16 @@ export function discrepancies(entry) {
 export function suggestion(entry) {
   return entry.outcome.NoDoi ? entry.outcome.NoDoi.suggested : null;
 }
+
+// How many resolved entries came from the local cache vs a fresh Crossref fetch.
+export function cacheTally(result) {
+  let cached = 0;
+  let fetched = 0;
+  for (const e of result?.entries ?? []) {
+    if (e.outcome.Resolved) {
+      if (e.outcome.Resolved.from_cache) cached += 1;
+      else fetched += 1;
+    }
+  }
+  return { cached, fetched };
+}
