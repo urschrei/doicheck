@@ -2,9 +2,7 @@
 
 use crate::compare::compare;
 use crate::crossref::{CrossrefClient, CrossrefError};
-use crate::model::{
-    CheckResult, CheckedEntry, EntryOutcome, Progress, ReferenceEntry, SuggestedDoi,
-};
+use crate::model::{CheckResult, CheckedEntry, EntryOutcome, Progress, SuggestedDoi};
 use crate::text::token_coverage;
 
 const SUGGEST_THRESHOLD: f64 = 0.8;
@@ -19,31 +17,25 @@ pub async fn run(
     mut progress: impl FnMut(Progress),
 ) -> CheckResult {
     let bib = crate::biblio::detect(text);
-    let (detected, raw_entries) = if bib.detected {
-        (true, bib.entries)
-    } else {
-        // Fallback: synthesise entries from every distinct DOI in the document.
-        let entries = crate::doi::extract_all(text)
-            .into_iter()
-            .enumerate()
-            .map(|(i, doi)| ReferenceEntry {
-                ordinal: i + 1,
-                raw_text: doi.clone(),
-                doi: Some(doi),
-            })
-            .collect();
-        (false, entries)
-    };
+    let detected = bib.detected;
+    let raw_entries = bib.entries;
 
     let total = raw_entries.len();
     let mut checked = Vec::with_capacity(total);
     for (i, entry) in raw_entries.into_iter().enumerate() {
         let outcome = match &entry.doi {
             Some(doi) => match client.resolve(doi).await {
-                Ok(meta) => EntryOutcome::Resolved {
-                    doi: doi.clone(),
-                    discrepancies: compare(&entry.raw_text, &meta),
-                },
+                Ok(meta) => {
+                    let discrepancies = if crate::text::is_comparable(&entry.raw_text) {
+                        compare(&entry.raw_text, &meta)
+                    } else {
+                        Vec::new()
+                    };
+                    EntryOutcome::Resolved {
+                        doi: doi.clone(),
+                        discrepancies,
+                    }
+                }
                 Err(CrossrefError::NotFound) => EntryOutcome::Unresolved {
                     doi: doi.clone(),
                     network_error: false,
@@ -167,6 +159,45 @@ mod tests {
                 assert!(s.title_match >= 80);
             }
             other => panic!("expected a suggestion, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn no_heading_uses_window_text_for_comparison() {
+        let server = MockServer::start().await;
+        let body = serde_json::json!({
+            "message": {
+                "title": ["A Study of Widgets"],
+                "author": [{"family": "Smith"}],
+                "issued": {"date-parts": [[2020]]},
+                "DOI": "10.1000/abc"
+            }
+        });
+        Mock::given(method("GET"))
+            .and(path_regex(r"/works/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let client = CrossrefClient::with_base("", server.uri());
+
+        // No "References" heading: the fallback window must carry the entry text,
+        // so the matching metadata yields NO discrepancies (not a false positive).
+        let text = "Smith, J. (2020). A Study of Widgets. Journal. https://doi.org/10.1000/abc";
+        let result = run(
+            "a.pdf".into(),
+            "fp".into(),
+            "now".into(),
+            text,
+            &client,
+            |_| {},
+        )
+        .await;
+
+        assert!(!result.bibliography_detected);
+        assert_eq!(result.entries.len(), 1);
+        match &result.entries[0].outcome {
+            EntryOutcome::Resolved { discrepancies, .. } => assert!(discrepancies.is_empty()),
+            other => panic!("expected Resolved, got {other:?}"),
         }
     }
 }
