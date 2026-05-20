@@ -18,6 +18,8 @@ static HEADING_RE: LazyLock<Regex> = LazyLock::new(|| {
 static NUMBER_MARKER_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)^\s*(?:\[\d+\]|\d+[.)])\s+").unwrap());
 
+static YEAR_PAREN_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\(\d{4}[a-z]?\)").unwrap());
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct Bibliography {
     pub detected: bool,
@@ -31,36 +33,54 @@ pub fn section_after_heading(text: &str) -> Option<&str> {
     Some(&text[last.end()..])
 }
 
-/// Split a bibliography section into entries. Prefers numbered markers; falls
-/// back to splitting on blank lines.
-pub fn split_entries(section: &str) -> Vec<String> {
-    let marker_count = NUMBER_MARKER_RE.find_iter(section).count();
-    if marker_count >= 2 {
-        return split_on_markers(section);
+/// A line begins a new entry if it carries a numbered marker, or it looks like
+/// an author-date opening: starts with an uppercase letter and has a
+/// parenthesised year near the start.
+fn is_entry_start(line: &str) -> bool {
+    if NUMBER_MARKER_RE.is_match(line) {
+        return true;
     }
-    // Blank-line separated paragraphs.
-    section
-        .split("\n\n")
-        .map(collapse_ws)
-        .filter(|s| !s.is_empty())
-        .collect()
+    let trimmed = line.trim_start();
+    let begins_upper = trimmed.chars().next().is_some_and(|c| c.is_uppercase());
+    begins_upper && YEAR_PAREN_RE.find(trimmed).is_some_and(|m| m.start() <= 80)
 }
 
-fn split_on_markers(section: &str) -> Vec<String> {
-    let mut starts: Vec<usize> = NUMBER_MARKER_RE
-        .find_iter(section)
-        .map(|m| m.start())
-        .collect();
-    starts.push(section.len());
-    let mut out = Vec::new();
-    for w in starts.windows(2) {
-        let chunk = &section[w[0]..w[1]];
-        let cleaned = collapse_ws(&NUMBER_MARKER_RE.replace(chunk, ""));
-        if !cleaned.is_empty() {
-            out.push(cleaned);
+/// Split a bibliography section into entries by detecting entry starts and
+/// joining wrapped continuation lines. Falls back to blank-line paragraphs if
+/// no entry starts are found.
+pub fn split_entries(section: &str) -> Vec<String> {
+    let mut entries: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    for line in section.lines() {
+        if is_entry_start(line) {
+            if let Some(buf) = current.take() {
+                let cleaned = collapse_ws(&buf);
+                if !cleaned.is_empty() {
+                    entries.push(cleaned);
+                }
+            }
+            current = Some(line.to_string());
+        } else if let Some(buf) = current.as_mut() {
+            buf.push(' ');
+            buf.push_str(line);
         }
     }
-    out
+    if let Some(buf) = current {
+        let cleaned = collapse_ws(&buf);
+        if !cleaned.is_empty() {
+            entries.push(cleaned);
+        }
+    }
+
+    if entries.is_empty() {
+        // No detectable entry starts: fall back to blank-line paragraphs.
+        return section
+            .split("\n\n")
+            .map(collapse_ws)
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
+    entries
 }
 
 fn collapse_ws(s: &str) -> String {
@@ -136,5 +156,33 @@ mod tests {
     fn heading_still_matches_plain_keywords() {
         assert!(section_after_heading("x\nReferences\n[1] A 10.1000/a").is_some());
         assert!(section_after_heading("x\nBibliography\nA 10.1000/a").is_some());
+    }
+
+    // Models how pdf-extract renders an author-date reference list: a numbered
+    // heading, hanging-indent wrapping, and blank lines within and between
+    // entries. The third entry has no DOI (a handle.net link).
+    const SAMPLE: &str = "Some preamble paragraph.\n \n 6. References  \n \n\
+Adams, D., & Watkins, C. (2012). Urban Planning and the Development Process. Routledge. \n \n\
+https://doi.org/10.4324/9780203857007 \n \n\
+Arnstein, S. R. (1969). A Ladder of Citizen Participation. Journal of the American Institute of \n \n\
+Planners, 35(4), 216-224. https://doi.org/10.1080/01944366908977225 \n \n\
+Malfer, B. (2025). Smart Cities in the European Union. Handle.Net. \n \n\
+https://hdl.handle.net/20.500.12608/83965 \n";
+
+    #[test]
+    fn segments_wrapped_author_date_entries() {
+        let bib = detect(SAMPLE);
+        assert!(bib.detected);
+        assert_eq!(bib.entries.len(), 3);
+        assert_eq!(bib.entries[0].doi.as_deref(), Some("10.4324/9780203857007"));
+        // The second entry's wrapped continuation line must be joined in.
+        assert!(bib.entries[1].raw_text.contains("Planners"));
+        assert_eq!(
+            bib.entries[1].doi.as_deref(),
+            Some("10.1080/01944366908977225")
+        );
+        // The handle.net entry has no DOI.
+        assert_eq!(bib.entries[2].doi, None);
+        assert!(bib.entries[2].raw_text.contains("Malfer"));
     }
 }
