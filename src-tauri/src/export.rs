@@ -85,6 +85,7 @@ mod tests {
                     outcome: EntryOutcome::Resolved {
                         doi: "10.1000/a".into(),
                         discrepancies: vec![],
+                        from_cache: false,
                     },
                 },
                 CheckedEntry {
@@ -100,6 +101,7 @@ mod tests {
                             reference_value: "x".into(),
                             crossref_value: "2020".into(),
                         }],
+                        from_cache: false,
                     },
                 },
                 CheckedEntry {

@@ -16,14 +16,14 @@ async fn resolve_doi_outcome(
     client: &CrossrefClient,
     cache: &(impl crate::cache::DoiCache + Sync),
 ) -> EntryOutcome {
-    let json = match cache.get(doi) {
-        Some(j) => Ok(j),
+    let (json, from_cache) = match cache.get(doi) {
+        Some(j) => (Ok(j), true),
         None => {
             let fetched = client.resolve_json(doi).await;
             if let Ok(ref j) = fetched {
                 cache.put(doi, j);
             }
-            fetched
+            (fetched, false)
         }
     };
     match json {
@@ -37,6 +37,7 @@ async fn resolve_doi_outcome(
             EntryOutcome::Resolved {
                 doi: doi.to_string(),
                 discrepancies,
+                from_cache,
             }
         }
         Err(CrossrefError::NotFound) => EntryOutcome::Unresolved {
@@ -60,6 +61,8 @@ pub async fn recheck_failures(
     mut progress: impl FnMut(Progress),
 ) -> CheckResult {
     let total = result.entries.len();
+    let mut cached = 0usize;
+    let mut fetched = 0usize;
     for (i, ce) in result.entries.iter_mut().enumerate() {
         let retry_doi = match &ce.outcome {
             EntryOutcome::Unresolved {
@@ -71,7 +74,21 @@ pub async fn recheck_failures(
         if let Some(doi) = retry_doi {
             ce.outcome = resolve_doi_outcome(&doi, &ce.entry.raw_text, client, cache).await;
         }
-        progress(Progress { done: i + 1, total });
+        match &ce.outcome {
+            EntryOutcome::Resolved {
+                from_cache: true, ..
+            } => cached += 1,
+            EntryOutcome::Resolved {
+                from_cache: false, ..
+            } => fetched += 1,
+            _ => {}
+        }
+        progress(Progress {
+            done: i + 1,
+            total,
+            cached,
+            fetched,
+        });
     }
     result
 }
@@ -92,6 +109,8 @@ pub async fn run(
 
     let total = raw_entries.len();
     let mut checked = Vec::with_capacity(total);
+    let mut cached = 0usize;
+    let mut fetched = 0usize;
     for (i, entry) in raw_entries.into_iter().enumerate() {
         let outcome = match &entry.doi {
             Some(doi) => resolve_doi_outcome(doi, &entry.raw_text, client, cache).await,
@@ -118,8 +137,22 @@ pub async fn run(
                 EntryOutcome::NoDoi { suggested }
             }
         };
+        match &outcome {
+            EntryOutcome::Resolved {
+                from_cache: true, ..
+            } => cached += 1,
+            EntryOutcome::Resolved {
+                from_cache: false, ..
+            } => fetched += 1,
+            _ => {}
+        }
         checked.push(CheckedEntry { entry, outcome });
-        progress(Progress { done: i + 1, total });
+        progress(Progress {
+            done: i + 1,
+            total,
+            cached,
+            fetched,
+        });
     }
 
     CheckResult {
@@ -380,6 +413,7 @@ mod tests {
                     outcome: EntryOutcome::Resolved {
                         doi: "10.1000/ok".into(),
                         discrepancies: vec![],
+                        from_cache: false,
                     },
                 },
             ],

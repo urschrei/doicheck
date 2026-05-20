@@ -372,6 +372,7 @@ mod tests {
                         reference_value: "(year not found)".into(),
                         crossref_value: "2020".into(),
                     }],
+                    from_cache: false,
                 },
             }],
         }

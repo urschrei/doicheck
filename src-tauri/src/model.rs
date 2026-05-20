@@ -37,6 +37,7 @@ pub enum EntryOutcome {
     Resolved {
         doi: String,
         discrepancies: Vec<Discrepancy>,
+        from_cache: bool,
     },
     Unresolved {
         doi: String,
@@ -58,6 +59,7 @@ pub struct Counts {
     pub total: usize,
     pub checkable: usize,
     pub resolved: usize,
+    pub from_cache: usize,
     pub unresolved: usize,
     pub with_discrepancies: usize,
     pub missing_doi_flagged: usize,
@@ -78,6 +80,8 @@ pub struct CheckResult {
 pub struct Progress {
     pub done: usize,
     pub total: usize,
+    pub cached: usize,
+    pub fetched: usize,
 }
 
 impl CheckResult {
@@ -88,11 +92,18 @@ impl CheckResult {
         };
         for e in &self.entries {
             match &e.outcome {
-                EntryOutcome::Resolved { discrepancies, .. } => {
+                EntryOutcome::Resolved {
+                    discrepancies,
+                    from_cache,
+                    ..
+                } => {
                     c.checkable += 1;
                     c.resolved += 1;
                     if !discrepancies.is_empty() {
                         c.with_discrepancies += 1;
+                    }
+                    if *from_cache {
+                        c.from_cache += 1;
                     }
                 }
                 EntryOutcome::Unresolved { network_error, .. } => {
@@ -134,6 +145,7 @@ mod tests {
                     outcome: EntryOutcome::Resolved {
                         doi: "10.1/a".into(),
                         discrepancies: vec![],
+                        from_cache: true,
                     },
                 },
                 CheckedEntry {
@@ -149,6 +161,7 @@ mod tests {
                             reference_value: "r".into(),
                             crossref_value: "c".into(),
                         }],
+                        from_cache: false,
                     },
                 },
                 CheckedEntry {
@@ -184,6 +197,7 @@ mod tests {
         assert_eq!(c.unresolved, 1);
         assert_eq!(c.with_discrepancies, 1);
         assert_eq!(c.missing_doi_flagged, 1);
+        assert_eq!(c.from_cache, 1);
     }
 
     #[test]

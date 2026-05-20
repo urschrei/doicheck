@@ -22,6 +22,12 @@ pub fn render(result: &CheckResult) -> String {
     }
     let _ = writeln!(s, "  Checkable (with DOI):        {}", c.checkable);
     let _ = writeln!(s, "  Resolved on Crossref:        {}", c.resolved);
+    let _ = writeln!(
+        s,
+        "    from cache: {}, fetched: {}",
+        c.from_cache,
+        c.resolved.saturating_sub(c.from_cache)
+    );
     let _ = writeln!(s, "  Not resolved:                {}", c.unresolved);
     let _ = writeln!(s, "  Entries with discrepancies:  {}", c.with_discrepancies);
     let _ = writeln!(
@@ -35,7 +41,9 @@ pub fn render(result: &CheckResult) -> String {
     let mut any_disc = false;
     for e in &result.entries {
         match &e.outcome {
-            EntryOutcome::Resolved { doi, discrepancies } if !discrepancies.is_empty() => {
+            EntryOutcome::Resolved {
+                doi, discrepancies, ..
+            } if !discrepancies.is_empty() => {
                 any_disc = true;
                 for d in discrepancies {
                     let _ = writeln!(
@@ -110,6 +118,7 @@ mod tests {
                             reference_value: "(title not found in reference)".into(),
                             crossref_value: "Neural Things".into(),
                         }],
+                        from_cache: false,
                     },
                 },
                 CheckedEntry {
@@ -132,5 +141,6 @@ mod tests {
         assert!(text.contains("[12] 10.1/yyy  title:"));
         assert!(text.contains("Neural Things"));
         assert!(text.contains("[33] no DOI; closest Crossref match 10.1000/xyz (title match 82%)"));
+        assert!(text.contains("from cache:"));
     }
 }
