@@ -152,11 +152,20 @@ impl CrossrefClient {
                     let s = resp.status();
                     let transient =
                         s == reqwest::StatusCode::TOO_MANY_REQUESTS || s.is_server_error();
-                    if transient && attempt < self.max_retries {
-                        let delay = retry_after(&resp).unwrap_or_else(|| self.backoff(attempt));
-                        attempt += 1;
-                        tokio::time::sleep(delay).await;
-                        continue;
+                    if transient {
+                        if attempt < self.max_retries {
+                            let delay = retry_after(&resp).unwrap_or_else(|| self.backoff(attempt));
+                            attempt += 1;
+                            tokio::time::sleep(delay).await;
+                            continue;
+                        }
+                        // Retries exhausted on a transient status: treat as a
+                        // transient network failure (so it is not cached and can
+                        // be re-checked later).
+                        return Err(CrossrefError::Network(format!(
+                            "crossref returned {s} after {} retries",
+                            self.max_retries
+                        )));
                     }
                     return Ok(resp);
                 }
