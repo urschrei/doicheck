@@ -5,3 +5,4 @@ dist/
 build/
 .svelte-kit/
 src-tauri/target/
+.claude/settings.local.json
