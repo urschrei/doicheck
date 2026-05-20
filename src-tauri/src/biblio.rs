@@ -87,28 +87,37 @@ fn collapse_ws(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Detect and segment the bibliography from full document text.
+/// Detect and segment the bibliography from full document text. If no heading is
+/// found, fall back to DOI-anchored windows so comparison still has real text.
 pub fn detect(text: &str) -> Bibliography {
-    match section_after_heading(text) {
-        Some(section) => {
-            let entries = split_entries(section)
-                .into_iter()
-                .enumerate()
-                .map(|(i, raw_text)| ReferenceEntry {
-                    ordinal: i + 1,
-                    doi: crate::doi::first_in(&raw_text),
-                    raw_text,
-                })
-                .collect();
-            Bibliography {
-                detected: true,
-                entries,
-            }
+    if let Some(section) = section_after_heading(text) {
+        let entries = split_entries(section)
+            .into_iter()
+            .enumerate()
+            .map(|(i, raw_text)| ReferenceEntry {
+                ordinal: i + 1,
+                doi: crate::doi::first_in(&raw_text),
+                raw_text,
+            })
+            .collect();
+        Bibliography {
+            detected: true,
+            entries,
         }
-        None => Bibliography {
+    } else {
+        let entries = crate::doi::extract_with_context(text)
+            .into_iter()
+            .enumerate()
+            .map(|(i, (doi, raw_text))| ReferenceEntry {
+                ordinal: i + 1,
+                raw_text,
+                doi: Some(doi),
+            })
+            .collect();
+        Bibliography {
             detected: false,
-            entries: Vec::new(),
-        },
+            entries,
+        }
     }
 }
 
@@ -136,10 +145,13 @@ mod tests {
     }
 
     #[test]
-    fn undetected_when_no_heading() {
-        let bib = detect("Just a body with 10.1000/xyz and no heading line.");
+    fn no_heading_falls_back_to_doi_windows() {
+        let bib = detect("Just a body with 10.1000/xyz inline and no heading line.");
         assert!(!bib.detected);
-        assert!(bib.entries.is_empty());
+        assert_eq!(bib.entries.len(), 1);
+        assert_eq!(bib.entries[0].doi.as_deref(), Some("10.1000/xyz"));
+        // The window carries surrounding text, not just the bare DOI.
+        assert!(bib.entries[0].raw_text.contains("body"));
     }
 
     #[test]
