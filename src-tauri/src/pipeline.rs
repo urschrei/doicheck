@@ -8,6 +8,74 @@ use crate::text::token_coverage;
 
 const SUGGEST_THRESHOLD: f64 = 0.8;
 
+/// Cache-first resolution: returns an `EntryOutcome` for a single DOI.
+/// Used by both `run` and `recheck_failures` to keep resolution consistent.
+async fn resolve_doi_outcome(
+    doi: &str,
+    raw_text: &str,
+    client: &CrossrefClient,
+    cache: &(impl crate::cache::DoiCache + Sync),
+) -> EntryOutcome {
+    let json = match cache.get(doi) {
+        Some(j) => Ok(j),
+        None => {
+            let fetched = client.resolve_json(doi).await;
+            if let Ok(ref j) = fetched {
+                cache.put(doi, j);
+            }
+            fetched
+        }
+    };
+    match json {
+        Ok(body) => {
+            let meta = crate::crossref::metadata_from_json(&body);
+            let discrepancies = if crate::text::is_comparable(raw_text) {
+                compare(raw_text, &meta)
+            } else {
+                Vec::new()
+            };
+            EntryOutcome::Resolved {
+                doi: doi.to_string(),
+                discrepancies,
+            }
+        }
+        Err(CrossrefError::NotFound) => EntryOutcome::Unresolved {
+            doi: doi.to_string(),
+            network_error: false,
+        },
+        Err(CrossrefError::Network(_)) => EntryOutcome::Unresolved {
+            doi: doi.to_string(),
+            network_error: true,
+        },
+    }
+}
+
+/// Re-resolve only the entries that previously failed transiently (network /
+/// capacity). Operates on a stored result, so it needs no document re-read.
+/// Other entries (resolved, not-found, no-DOI) are left unchanged.
+pub async fn recheck_failures(
+    mut result: CheckResult,
+    client: &CrossrefClient,
+    cache: &(impl crate::cache::DoiCache + Sync),
+    mut progress: impl FnMut(Progress),
+) -> CheckResult {
+    let total = result.entries.len();
+    for (i, ce) in result.entries.iter_mut().enumerate() {
+        let retry_doi = match &ce.outcome {
+            EntryOutcome::Unresolved {
+                doi,
+                network_error: true,
+            } => Some(doi.clone()),
+            _ => None,
+        };
+        if let Some(doi) = retry_doi {
+            ce.outcome = resolve_doi_outcome(&doi, &ce.entry.raw_text, client, cache).await;
+        }
+        progress(Progress { done: i + 1, total });
+    }
+    result
+}
+
 /// Run the checks over already-extracted document text.
 pub async fn run(
     filename: String,
@@ -26,41 +94,7 @@ pub async fn run(
     let mut checked = Vec::with_capacity(total);
     for (i, entry) in raw_entries.into_iter().enumerate() {
         let outcome = match &entry.doi {
-            Some(doi) => {
-                // Cache first; only hit the network for unknown DOIs.
-                let json = match cache.get(doi) {
-                    Some(j) => Ok(j),
-                    None => {
-                        let fetched = client.resolve_json(doi).await;
-                        if let Ok(ref j) = fetched {
-                            cache.put(doi, j);
-                        }
-                        fetched
-                    }
-                };
-                match json {
-                    Ok(body) => {
-                        let meta = crate::crossref::metadata_from_json(&body);
-                        let discrepancies = if crate::text::is_comparable(&entry.raw_text) {
-                            compare(&entry.raw_text, &meta)
-                        } else {
-                            Vec::new()
-                        };
-                        EntryOutcome::Resolved {
-                            doi: doi.clone(),
-                            discrepancies,
-                        }
-                    }
-                    Err(CrossrefError::NotFound) => EntryOutcome::Unresolved {
-                        doi: doi.clone(),
-                        network_error: false,
-                    },
-                    Err(CrossrefError::Network(_)) => EntryOutcome::Unresolved {
-                        doi: doi.clone(),
-                        network_error: true,
-                    },
-                }
-            }
+            Some(doi) => resolve_doi_outcome(doi, &entry.raw_text, client, cache).await,
             None => {
                 let suggested = match client.search(&entry.raw_text).await {
                     Ok(Some(hit)) if !hit.doi.is_empty() => {
@@ -101,6 +135,7 @@ pub async fn run(
 mod tests {
     use super::*;
     use crate::cache::MemoryCache;
+    use crate::model::{CheckResult, CheckedEntry, ReferenceEntry};
     use wiremock::matchers::{method, path_regex, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -304,5 +339,62 @@ mod tests {
             other => panic!("expected transient Unresolved, got {other:?}"),
         }
         assert!(cache.get("10.1000/abc").is_none());
+    }
+
+    #[tokio::test]
+    async fn recheck_failures_only_retries_transient() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"/works/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "message": { "title": ["A Study of Widgets"], "DOI": "10.1000/fail" }
+            })))
+            .mount(&server)
+            .await;
+        let client = CrossrefClient::with_base("", server.uri());
+        let cache = MemoryCache::default();
+
+        let result = CheckResult {
+            filename: "a.pdf".into(),
+            fingerprint: "fp".into(),
+            run_at: "now".into(),
+            bibliography_detected: true,
+            entries: vec![
+                CheckedEntry {
+                    entry: ReferenceEntry {
+                        ordinal: 1,
+                        raw_text: "Smith (2020). A Study of Widgets.".into(),
+                        doi: Some("10.1000/fail".into()),
+                    },
+                    outcome: EntryOutcome::Unresolved {
+                        doi: "10.1000/fail".into(),
+                        network_error: true,
+                    },
+                },
+                CheckedEntry {
+                    entry: ReferenceEntry {
+                        ordinal: 2,
+                        raw_text: "x".into(),
+                        doi: Some("10.1000/ok".into()),
+                    },
+                    outcome: EntryOutcome::Resolved {
+                        doi: "10.1000/ok".into(),
+                        discrepancies: vec![],
+                    },
+                },
+            ],
+        };
+
+        let updated = recheck_failures(result, &client, &cache, |_| {}).await;
+        // The transient failure is now resolved.
+        assert!(matches!(
+            updated.entries[0].outcome,
+            EntryOutcome::Resolved { .. }
+        ));
+        // The previously-resolved entry is untouched (no network call for it).
+        assert!(matches!(
+            updated.entries[1].outcome,
+            EntryOutcome::Resolved { .. }
+        ));
     }
 }

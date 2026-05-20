@@ -264,6 +264,19 @@ impl Store {
         }
     }
 
+    /// The stored file kind ("pdf"/"docx") for a document, by fingerprint.
+    pub fn kind_for(&self, fingerprint: &str) -> Result<Option<String>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT kind FROM documents WHERE fingerprint = ?1")?;
+        let mut rows = stmt.query(params![fingerprint])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Sidebar list: one row per document with its latest status.
     pub fn list_documents(&self) -> Result<Vec<DocumentSummary>, StoreError> {
         let mut stmt = self.conn.prepare(

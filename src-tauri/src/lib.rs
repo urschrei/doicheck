@@ -42,6 +42,7 @@ pub fn run() {
             commands::open_document,
             commands::latest_check,
             commands::check_document,
+            commands::recheck_failures,
             commands::export_report,
         ])
         .run(tauri::generate_context!())

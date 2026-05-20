@@ -116,6 +116,55 @@ pub async fn check_document(
     Ok(result)
 }
 
+/// Re-resolve only the entries that previously failed transiently, merge the
+/// result, persist, and return it. Works from stored state (no file needed).
+#[tauri::command]
+pub async fn recheck_failures(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    fingerprint: String,
+) -> Result<crate::model::CheckResult, String> {
+    let (result, kind, email) = {
+        let store = state.store.lock().map_err(|e| e.to_string())?;
+        let result = store
+            .latest_result(&fingerprint)
+            .map_err(map_err)?
+            .ok_or_else(|| "no prior check for this document".to_string())?;
+        let kind = store
+            .kind_for(&fingerprint)
+            .map_err(map_err)?
+            .unwrap_or_else(|| "pdf".to_string());
+        let email = store
+            .get_setting("crossref_email")
+            .map_err(map_err)?
+            .unwrap_or_else(|| DEFAULT_EMAIL.to_string());
+        (result, kind, email)
+    };
+
+    let client = CrossrefClient::new(&email);
+    let app_for_progress = app.clone();
+    let updated = crate::pipeline::recheck_failures(
+        result,
+        &client,
+        &crate::cache::StoreCache {
+            store: &state.store,
+        },
+        move |p: crate::model::Progress| {
+            let _ = app_for_progress.emit("progress", p);
+        },
+    )
+    .await;
+
+    let report_text = crate::report::render(&updated);
+    {
+        let mut store = state.store.lock().map_err(|e| e.to_string())?;
+        store
+            .save_check(&updated, &kind, &report_text)
+            .map_err(map_err)?;
+    }
+    Ok(updated)
+}
+
 /// Write a stored report to `path` in the given format ("txt", "json", "csv").
 #[tauri::command]
 pub fn export_report(
