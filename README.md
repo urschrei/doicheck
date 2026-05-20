@@ -97,10 +97,10 @@ verifies the update with the bundled public key, and offers to download and
 install a newer version. Updates are signed by the updater key above; this is
 independent of platform code signing.
 
-## Design notes
+## Development
 
-The design specifications and implementation plans for each iteration are under
-`docs/superpowers/`.
+Day-to-day development notes — architecture, the processing pipeline, the data
+model, testing, CI, and releasing — are in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
 ## License
 

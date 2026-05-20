@@ -6,6 +6,7 @@
   import Sidebar from "$lib/Sidebar.svelte";
   import ReportPane from "$lib/ReportPane.svelte";
   import Settings from "$lib/Settings.svelte";
+  import Help from "$lib/Help.svelte";
   import { checkForUpdate } from "$lib/update.js";
 
   let documents = $state([]);
@@ -15,6 +16,7 @@
   let progress = $state(null);
   let error = $state("");
   let showSettings = $state(false);
+  let showHelp = $state(false);
   let selectedFingerprint = $state("");
 
   async function refresh() {
@@ -125,7 +127,7 @@
 </script>
 
 <main class="layout">
-  <Sidebar {documents} onselect={selectDocument} onsettings={() => (showSettings = true)} ondelete={deleteDocument} />
+  <Sidebar {documents} onselect={selectDocument} onsettings={() => (showSettings = true)} onhelp={() => (showHelp = true)} ondelete={deleteDocument} />
   <section class="pane">
     {#if error}<p class="error">{error}</p>{/if}
     <ReportPane
@@ -142,6 +144,9 @@
   </section>
   {#if showSettings}
     <Settings onclose={() => (showSettings = false)} />
+  {/if}
+  {#if showHelp}
+    <Help onclose={() => (showHelp = false)} />
   {/if}
 </main>
 

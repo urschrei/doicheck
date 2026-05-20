@@ -1,5 +1,5 @@
 <script>
-  let { documents = [], onselect, onsettings, ondelete } = $props();
+  let { documents = [], onselect, onsettings, ondelete, onhelp } = $props();
 
   function meta(status) {
     if (status === "incomplete") return { glyph: "↻", colour: "#ff9f0a", title: "Interrupted - re-check failures" };
@@ -12,7 +12,10 @@
 <aside class="sidebar">
   <div class="head">
     <span class="title">Documents</span>
-    <button class="gear" onclick={() => onsettings?.()} title="Settings" aria-label="Settings">&#9881;</button>
+    <span class="actions">
+      <button class="gear" onclick={() => onhelp?.()} title="Help and about" aria-label="Help">?</button>
+      <button class="gear" onclick={() => onsettings?.()} title="Settings" aria-label="Settings">&#9881;</button>
+    </span>
   </div>
   <ul>
     {#each documents as d (d.fingerprint)}
@@ -33,6 +36,7 @@
   .head { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; }
   .title { text-transform: uppercase; font-size: 10px; color: #888; }
   .gear { border: 0; background: transparent; cursor: pointer; font-size: 13px; }
+  .actions { display: flex; gap: 4px; }
   ul { list-style: none; margin: 0; padding: 0; }
   .row { display: flex; align-items: stretch; }
   .row:hover { background: #ececec; }
