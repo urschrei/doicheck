@@ -100,18 +100,18 @@ mod tests {
 
     #[test]
     fn splits_numbered_entries_and_finds_dois() {
-        let section = "\n[1] Smith J. Title. 10.1/aaa\n[2] Jones K. Other. 10.2/bbb\n";
+        let section = "\n[1] Smith J. Title. 10.1000/aaa\n[2] Jones K. Other. 10.2000/bbb\n";
         let bib = detect(&format!("References{section}"));
         assert!(bib.detected);
         assert_eq!(bib.entries.len(), 2);
         assert_eq!(bib.entries[0].ordinal, 1);
-        assert_eq!(bib.entries[0].doi.as_deref(), Some("10.1/aaa"));
-        assert_eq!(bib.entries[1].doi.as_deref(), Some("10.2/bbb"));
+        assert_eq!(bib.entries[0].doi.as_deref(), Some("10.1000/aaa"));
+        assert_eq!(bib.entries[1].doi.as_deref(), Some("10.2000/bbb"));
     }
 
     #[test]
     fn undetected_when_no_heading() {
-        let bib = detect("Just a body with 10.1/xyz and no heading line.");
+        let bib = detect("Just a body with 10.1000/xyz and no heading line.");
         assert!(!bib.detected);
         assert!(bib.entries.is_empty());
     }

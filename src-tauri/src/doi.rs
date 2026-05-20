@@ -4,7 +4,7 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 static DOI_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)10\.\d{1,9}/[-._;()/:a-z0-9]+").unwrap());
+    LazyLock::new(|| Regex::new(r"(?i)10\.\d{4,9}/[-._;()/:a-z0-9]+").unwrap());
 
 /// Normalise a DOI: drop a URL or `doi:` prefix, lowercase, strip trailing
 /// punctuation that commonly clings to DOIs in reference lists.
@@ -50,8 +50,8 @@ mod tests {
 
     #[test]
     fn extracts_and_dedupes_in_order() {
-        let text = "see 10.1/aaa and 10.2/bbb and again 10.1/AAA.";
-        assert_eq!(extract_all(text), vec!["10.1/aaa", "10.2/bbb"]);
+        let text = "see 10.1000/aaa and 10.2000/bbb and again 10.1000/AAA.";
+        assert_eq!(extract_all(text), vec!["10.1000/aaa", "10.2000/bbb"]);
     }
 
     #[test]
