@@ -3,6 +3,14 @@
 use crate::compare::Metadata;
 use serde::Deserialize;
 
+/// Resolve XML/HTML entity references that Crossref sometimes returns in string
+/// fields (e.g. `&amp;`, `&#233;`). Falls back to the raw string on error.
+fn unescape(s: &str) -> String {
+    quick_xml::escape::unescape(s)
+        .map(|c| c.into_owned())
+        .unwrap_or_else(|_| s.to_string())
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum CrossrefError {
     #[error("network error: {0}")]
@@ -61,11 +69,11 @@ struct Issued {
 impl Work {
     fn to_metadata(&self) -> Metadata {
         Metadata {
-            title: self.title.first().cloned(),
+            title: self.title.first().map(|t| unescape(t)),
             first_author_surname: self
                 .author
                 .first()
-                .map(|a| a.family.clone())
+                .map(|a| unescape(&a.family))
                 .filter(|f| !f.is_empty()),
             year: self
                 .issued
@@ -73,7 +81,7 @@ impl Work {
                 .and_then(|i| i.date_parts.first())
                 .and_then(|p| p.first())
                 .copied(),
-            container_title: self.container_title.first().cloned(),
+            container_title: self.container_title.first().map(|c| unescape(c)),
         }
     }
 }
@@ -152,5 +160,30 @@ impl CrossrefClient {
                 doi: w.doi,
             })
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn to_metadata_unescapes_html_entities() {
+        let work = Work {
+            title: vec!["Science, Technology, &amp; Human Values".to_string()],
+            author: vec![Author {
+                family: "O&apos;Neil".to_string(),
+            }],
+            container_title: vec!["A &lt;Journal&gt;".to_string()],
+            issued: None,
+            doi: "10.1000/x".to_string(),
+        };
+        let m = work.to_metadata();
+        assert_eq!(
+            m.title.as_deref(),
+            Some("Science, Technology, & Human Values")
+        );
+        assert_eq!(m.first_author_surname.as_deref(), Some("O'Neil"));
+        assert_eq!(m.container_title.as_deref(), Some("A <Journal>"));
     }
 }
