@@ -36,9 +36,9 @@
   ul { list-style: none; margin: 0; padding: 0; }
   .row { display: flex; align-items: stretch; }
   .row:hover { background: #ececec; }
-  .rowmain { display: grid; grid-template-columns: 16px 1fr; gap: 4px; padding: 6px 10px; flex: 1; border: 0; background: transparent; text-align: left; cursor: pointer; font: inherit; }
-  .name { font-weight: 600; }
-  .when { grid-column: 2; color: #888; font-size: 11px; }
-  .del { border: 0; background: transparent; color: #aaa; cursor: pointer; padding: 0 10px; font-size: 12px; }
+  .rowmain { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 4px; padding: 6px 10px; flex: 1; min-width: 0; border: 0; background: transparent; text-align: left; cursor: pointer; font: inherit; }
+  .name { font-weight: 600; overflow-wrap: anywhere; }
+  .when { grid-column: 2; color: #888; font-size: 11px; overflow-wrap: anywhere; }
+  .del { flex: none; align-self: flex-start; margin-top: 6px; border: 0; background: transparent; color: #aaa; cursor: pointer; padding: 0 10px; font-size: 12px; }
   .del:hover { color: #b00020; }
 </style>
