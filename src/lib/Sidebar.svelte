@@ -1,7 +1,12 @@
 <script>
-  let { documents = [], onselect, onsettings } = $props();
-  const dot = (status) =>
-    status === "has-issues" ? "#febc2e" : status === "failed" ? "#ff5f57" : "#28c840";
+  let { documents = [], onselect, onsettings, ondelete } = $props();
+
+  function meta(status) {
+    if (status === "incomplete") return { glyph: "↻", colour: "#ff9f0a", title: "Interrupted - re-check failures" };
+    if (status === "has-issues") return { glyph: "●", colour: "#febc2e", title: "Has issues" };
+    if (status === "failed") return { glyph: "●", colour: "#ff5f57", title: "Check failed" };
+    return { glyph: "●", colour: "#28c840", title: "Clean" };
+  }
 </script>
 
 <aside class="sidebar">
@@ -11,12 +16,13 @@
   </div>
   <ul>
     {#each documents as d (d.fingerprint)}
-      <li>
-        <button class="row" onclick={() => onselect?.(d.fingerprint)}>
-          <span class="status" style="color:{dot(d.status)}">&#9679;</span>
+      <li class="row">
+        <button class="rowmain" onclick={() => onselect?.(d.fingerprint)}>
+          <span class="status" style="color:{meta(d.status).colour}" title={meta(d.status).title}>{meta(d.status).glyph}</span>
           <span class="name">{d.filename}</span>
           <span class="when">{d.last_checked}</span>
         </button>
+        <button class="del" title="Remove document" aria-label="Remove document" onclick={() => ondelete?.(d.fingerprint)}>&#10005;</button>
       </li>
     {/each}
   </ul>
@@ -28,9 +34,11 @@
   .title { text-transform: uppercase; font-size: 10px; color: #888; }
   .gear { border: 0; background: transparent; cursor: pointer; font-size: 13px; }
   ul { list-style: none; margin: 0; padding: 0; }
-  li { margin: 0; }
-  .row { display: grid; grid-template-columns: 14px 1fr; gap: 4px; padding: 6px 10px; width: 100%; border: 0; background: transparent; text-align: left; cursor: pointer; font: inherit; }
+  .row { display: flex; align-items: stretch; }
   .row:hover { background: #ececec; }
+  .rowmain { display: grid; grid-template-columns: 16px 1fr; gap: 4px; padding: 6px 10px; flex: 1; border: 0; background: transparent; text-align: left; cursor: pointer; font: inherit; }
   .name { font-weight: 600; }
   .when { grid-column: 2; color: #888; font-size: 11px; }
+  .del { border: 0; background: transparent; color: #b00020; cursor: pointer; padding: 0 10px; visibility: hidden; font-size: 12px; }
+  .row:hover .del { visibility: visible; }
 </style>

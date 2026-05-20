@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import * as api from "$lib/api.js";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
+  import { ask } from "@tauri-apps/plugin-dialog";
   import Sidebar from "$lib/Sidebar.svelte";
   import ReportPane from "$lib/ReportPane.svelte";
   import Settings from "$lib/Settings.svelte";
@@ -74,6 +75,20 @@
     if (stored) result = stored;
   }
 
+  async function deleteDocument(fingerprint) {
+    const ok = await ask("Remove this document and its reports? Cached DOIs are kept.", {
+      title: "Remove document",
+      kind: "warning",
+    });
+    if (!ok) return;
+    await api.deleteDocument(fingerprint);
+    if (selectedFingerprint === fingerprint) {
+      result = null;
+      selectedFingerprint = "";
+    }
+    await refresh();
+  }
+
   onMount(() => {
     refresh();
     let unlistenProgress;
@@ -94,7 +109,7 @@
 </script>
 
 <main class="layout">
-  <Sidebar {documents} onselect={selectDocument} onsettings={() => (showSettings = true)} />
+  <Sidebar {documents} onselect={selectDocument} onsettings={() => (showSettings = true)} ondelete={deleteDocument} />
   <section class="pane">
     {#if error}<p class="error">{error}</p>{/if}
     <ReportPane

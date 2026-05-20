@@ -12,4 +12,5 @@ export const checkDocument = (path) => invoke("check_document", { path });
 export const exportReport = (path, fingerprint, format) =>
   invoke("export_report", { path, fingerprint, format });
 export const recheckFailures = (fingerprint) => invoke("recheck_failures", { fingerprint });
+export const deleteDocument = (fingerprint) => invoke("delete_document", { fingerprint });
 export const onProgress = (handler) => listen("progress", (e) => handler(e.payload));

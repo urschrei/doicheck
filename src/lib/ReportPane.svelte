@@ -9,6 +9,7 @@
   let filter = $state("all");
   let query = $state("");
   let showClean = $state(false);
+  let exportOpen = $state(false);
 
   const classified = $derived(
     (result?.entries ?? []).map((e) => ({ entry: e, kind: classify(e) })),
@@ -60,15 +61,23 @@
 </script>
 
 <div class="toolbar">
-  <button onclick={pickAndCheck} disabled={busy}>Open</button>
-  <button onclick={() => onrecheck?.()} disabled={busy || !currentPath}>Re-check</button>
-  <button onclick={() => onrecheckfailures?.()} disabled={busy || !result || counts.network === 0}>
-    Re-check failures{counts.network ? ` (${counts.network})` : ""}
-  </button>
+  <button class="primary" onclick={pickAndCheck} disabled={busy}>Open</button>
+  <button class="secondary" onclick={() => onrecheck?.()} disabled={busy || !currentPath}>Re-check entire doc</button>
+  {#if counts.network > 0}
+    <button class="secondary" onclick={() => onrecheckfailures?.()} disabled={busy || !result}>Re-check failures ({counts.network})</button>
+  {/if}
   <span class="spacer"></span>
-  <button onclick={() => doExport("txt", "txt")} disabled={!result}>Save report</button>
-  <button onclick={() => doExport("json", "json")} disabled={!result}>Export JSON</button>
-  <button onclick={() => doExport("csv", "csv")} disabled={!result}>Export CSV</button>
+  <div class="exportwrap">
+    <button class="secondary" onclick={() => (exportOpen = !exportOpen)} disabled={!result}>Export &#9662;</button>
+    {#if exportOpen}
+      <button class="menu-backdrop" aria-label="Close menu" onclick={() => (exportOpen = false)}></button>
+      <div class="menu">
+        <button onclick={() => { exportOpen = false; doExport("txt", "txt"); }}>Save report (.txt)</button>
+        <button onclick={() => { exportOpen = false; doExport("json", "json"); }}>JSON</button>
+        <button onclick={() => { exportOpen = false; doExport("csv", "csv"); }}>CSV</button>
+      </div>
+    {/if}
+  </div>
 </div>
 
 {#if busy}
@@ -115,6 +124,14 @@
   .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
   .spacer { flex: 1; }
   button { font: inherit; padding: 4px 12px; }
+  .primary { background: #0a84ff; color: #fff; border: 1px solid #0a84ff; border-radius: 6px; }
+  .secondary { background: #fff; color: #222; border: 1px solid #c4c4c4; border-radius: 6px; }
+  .secondary:disabled { color: #aaa; border-color: #e0e0e0; }
+  .exportwrap { position: relative; }
+  .menu-backdrop { position: fixed; inset: 0; background: transparent; border: 0; padding: 0; cursor: default; }
+  .menu { position: absolute; right: 0; top: 110%; z-index: 2; background: #fff; border: 1px solid #ddd; border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,0.15); display: flex; flex-direction: column; min-width: 150px; overflow: hidden; }
+  .menu button { background: #fff; border: 0; border-radius: 0; text-align: left; padding: 8px 12px; }
+  .menu button:hover { background: #f0f4ff; }
   .summary { display: flex; gap: 6px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
   .summary button { font-size: 12px; padding: 2px 10px; border-radius: 12px; border: 1px solid #ccc; background: #fff; }
   .summary button.active { border-color: #0a52c2; color: #0a52c2; }

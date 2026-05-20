@@ -10,6 +10,23 @@
   const discs = $derived(discrepancies(entry));
   const sugg = $derived(suggestion(entry));
 
+  const URL_RE = /(https?:\/\/[^\s)]+)/g;
+  function parts(text) {
+    const out = [];
+    let last = 0;
+    for (const m of text.matchAll(URL_RE)) {
+      if (m.index > last) out.push({ t: text.slice(last, m.index) });
+      out.push({ url: m[0] });
+      last = m.index + m[0].length;
+    }
+    if (last < text.length) out.push({ t: text.slice(last) });
+    return out;
+  }
+
+  function open(url) {
+    openUrl(url);
+  }
+
   async function copy(text) {
     try {
       await navigator.clipboard.writeText(text);
@@ -27,7 +44,7 @@
   </div>
 
   {#if entry.entry.raw_text}
-    <p class="ref">{entry.entry.raw_text}</p>
+    <p class="ref">{#each parts(entry.entry.raw_text) as p}{#if p.url}<a class="link" href={p.url} onclick={(e) => { e.preventDefault(); open(p.url); }}>{p.url}</a>{:else}{p.t}{/if}{/each}</p>
   {/if}
 
   {#if discs.length}
@@ -39,13 +56,15 @@
   {/if}
 
   {#if sugg}
-    <p class="suggest">Closest Crossref match: <code>{sugg.doi}</code> ({sugg.title_match}%)
+    <p class="suggest">Closest Crossref match:
+      <a class="link" href={`https://doi.org/${sugg.doi}`} onclick={(e) => { e.preventDefault(); open(`https://doi.org/${sugg.doi}`); }}>{sugg.doi}</a>
+      ({sugg.title_match}%)
       <button onclick={() => copy(sugg.doi)}>copy</button></p>
   {/if}
 
   {#if doi}
     <div class="actions">
-      <button onclick={() => openUrl(`https://doi.org/${doi}`)}>open DOI</button>
+      <a class="link" href={`https://doi.org/${doi}`} onclick={(e) => { e.preventDefault(); open(`https://doi.org/${doi}`); }}>{doi}</a>
       <button onclick={() => copy(doi)}>copy DOI</button>
     </div>
   {/if}
@@ -59,7 +78,7 @@
   .ref { color: #444; margin: 4px 0; }
   .fields { margin: 4px 0; padding-left: 18px; }
   .fields li { margin: 2px 0; }
-  .suggest code { font-family: ui-monospace, Menlo, monospace; }
-  .actions { display: flex; gap: 6px; margin-top: 4px; }
+.actions { display: flex; gap: 6px; margin-top: 4px; align-items: center; }
   button { font: inherit; font-size: 12px; padding: 2px 8px; }
+  .link { color: #0a52c2; text-decoration: underline; cursor: pointer; }
 </style>
