@@ -23,7 +23,7 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "sync", "time"] }
-reqwest = { version = "0.13.3", default-features = false, features = ["json", "rustls"] }
+reqwest = { version = "0.13.3", default-features = false, features = ["json", "rustls", "query"] }
 rusqlite = { version = "0.39.0", features = ["bundled"] }
 regex = "1.12.3"
 sha2 = "0.11.0"

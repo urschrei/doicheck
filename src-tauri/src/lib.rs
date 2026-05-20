@@ -2,6 +2,7 @@
 
 pub mod biblio;
 pub mod compare;
+pub mod crossref;
 pub mod doi;
 pub mod extract;
 pub mod ingest;
