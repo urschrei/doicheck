@@ -18,7 +18,11 @@ static HEADING_RE: LazyLock<Regex> = LazyLock::new(|| {
 static NUMBER_MARKER_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)^\s*(?:\[\d+\]|\d+[.)])\s+").unwrap());
 
-static YEAR_PAREN_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\(\d{4}[a-z]?\)").unwrap());
+// A parenthesised publication year, e.g. "(2025)" or "(2018a)". Constrained to
+// 1900-2099 so a journal article/issue number like "Land, 14 (1225)" is not
+// mistaken for a year (which would wrongly split a reference mid-entry).
+static YEAR_PAREN_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\((?:19|20)\d{2}[a-z]?\)").unwrap());
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Bibliography {
@@ -196,5 +200,26 @@ https://hdl.handle.net/20.500.12608/83965 \n";
         // The handle.net entry has no DOI.
         assert_eq!(bib.entries[2].doi, None);
         assert!(bib.entries[2].raw_text.contains("Malfer"));
+    }
+
+    // A journal article number in parentheses ("Land, 14 (1225)") must not be
+    // mistaken for a publication year and split the reference (regression).
+    #[test]
+    fn issue_number_in_parens_does_not_split_entry() {
+        let section = "References\n\
+Sun, X. et al. (2025) \"Are we satisfied with the achievements of new eco-city construction in \n\
+  China? A case study of the Sino-Singapore Tianjin eco-city\", Land, 14 (1225), pp. \n\
+  1-22. Available at: https://doi.org/10.3390/land14061225 \n\
+ \n\
+Tan, Y. (2026) Tigers and flies. Available at: https://example.com/x \n";
+        let bib = detect(section);
+        assert!(bib.detected);
+        let sun = bib
+            .entries
+            .iter()
+            .find(|e| e.doi.as_deref() == Some("10.3390/land14061225"))
+            .expect("the Sun reference should be a single entry carrying its DOI");
+        assert!(sun.raw_text.contains("Sun"));
+        assert!(sun.raw_text.contains("2025"));
     }
 }
