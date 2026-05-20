@@ -52,12 +52,16 @@ cargo fmt --check
 
 ## Build a release locally
 
+Because updater artifacts are enabled, building a bundle needs the signing key:
+
 ```sh
+export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.doicheck-updater.key)"
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
 npm run tauri build
 ```
 
-Producing updater artifacts requires the signing key (see Releasing). Without the
-signing environment variables set, a normal (non-updater) build still works.
+`npm run tauri dev` does not bundle and needs none of this. Day-to-day releases
+are produced by CI (see Releasing), so local bundle builds are rarely necessary.
 
 ## Releasing (maintainers)
 
