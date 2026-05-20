@@ -46,7 +46,7 @@ changed in Settings, along with a default reports folder.
 ```sh
 cd src-tauri
 cargo nextest run
-cargo clippy --all-targets -- -D warnings
+cargo clippy --no-deps --all-targets -- -D warnings
 cargo fmt --check
 ```
 
