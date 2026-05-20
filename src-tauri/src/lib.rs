@@ -36,8 +36,10 @@ pub fn run() {
             commands::list_documents,
             commands::get_email,
             commands::set_email,
+            commands::get_reports_dir,
+            commands::set_reports_dir,
             commands::open_document,
-            commands::report_by_fingerprint,
+            commands::latest_check,
             commands::check_document,
             commands::export_report,
         ])
