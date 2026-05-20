@@ -58,6 +58,7 @@ impl Store {
                 unresolved INTEGER NOT NULL,
                 with_discrepancies INTEGER NOT NULL,
                 missing_doi_flagged INTEGER NOT NULL,
+                network_failed INTEGER NOT NULL DEFAULT 0,
                 report_text TEXT NOT NULL,
                 result_json TEXT NOT NULL DEFAULT ''
             );
@@ -95,6 +96,17 @@ impl Store {
         if !has_result_json {
             self.conn.execute(
                 "ALTER TABLE checks ADD COLUMN result_json TEXT NOT NULL DEFAULT ''",
+                [],
+            )?;
+        }
+        let has_network_failed: bool = self.conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('checks') WHERE name = 'network_failed'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )? > 0;
+        if !has_network_failed {
+            self.conn.execute(
+                "ALTER TABLE checks ADD COLUMN network_failed INTEGER NOT NULL DEFAULT 0",
                 [],
             )?;
         }
@@ -171,8 +183,9 @@ impl Store {
         )?;
         tx.execute(
             "INSERT INTO checks(document_id, run_at, total, checkable, resolved,
-                 unresolved, with_discrepancies, missing_doi_flagged, report_text, result_json)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                 unresolved, with_discrepancies, missing_doi_flagged, network_failed,
+                 report_text, result_json)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
             params![
                 document_id,
                 result.run_at,
@@ -182,6 +195,7 @@ impl Store {
                 counts.unresolved as i64,
                 counts.with_discrepancies as i64,
                 counts.missing_doi_flagged as i64,
+                counts.network_failed as i64,
                 report_text,
                 serde_json::to_string(result).unwrap_or_default()
             ],
@@ -277,11 +291,43 @@ impl Store {
         }
     }
 
+    /// Delete a document and all its checks/entries/discrepancies. The shared
+    /// DOI cache (`crossref_cache`) is deliberately left intact.
+    pub fn delete_document(&mut self, fingerprint: &str) -> Result<(), StoreError> {
+        use rusqlite::OptionalExtension;
+        let tx = self.conn.transaction()?;
+        let doc_id: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM documents WHERE fingerprint = ?1",
+                params![fingerprint],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(doc_id) = doc_id {
+            tx.execute(
+                "DELETE FROM discrepancies WHERE entry_id IN
+                   (SELECT e.id FROM entries e JOIN checks c ON c.id = e.check_id
+                    WHERE c.document_id = ?1)",
+                params![doc_id],
+            )?;
+            tx.execute(
+                "DELETE FROM entries WHERE check_id IN
+                   (SELECT id FROM checks WHERE document_id = ?1)",
+                params![doc_id],
+            )?;
+            tx.execute("DELETE FROM checks WHERE document_id = ?1", params![doc_id])?;
+            tx.execute("DELETE FROM documents WHERE id = ?1", params![doc_id])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Sidebar list: one row per document with its latest status.
     pub fn list_documents(&self) -> Result<Vec<DocumentSummary>, StoreError> {
         let mut stmt = self.conn.prepare(
             "SELECT d.fingerprint, d.filename, d.last_checked,
                  (SELECT CASE
+                    WHEN c.network_failed > 0 THEN 'incomplete'
                     WHEN c.with_discrepancies > 0 OR c.unresolved > 0 THEN 'has-issues'
                     ELSE 'clean' END
                   FROM checks c WHERE c.document_id = d.id ORDER BY c.id DESC LIMIT 1)
@@ -381,6 +427,43 @@ mod tests {
         assert_eq!(
             store.cache_get("10.1/x").unwrap().as_deref(),
             Some("{\"v\":2}")
+        );
+    }
+
+    #[test]
+    fn status_incomplete_when_network_failed() {
+        let mut store = Store::open_in_memory().unwrap();
+        let mut r = sample();
+        r.fingerprint = "sha256:net".into();
+        r.entries = vec![CheckedEntry {
+            entry: ReferenceEntry {
+                ordinal: 1,
+                raw_text: "x".into(),
+                doi: Some("10.1/a".into()),
+            },
+            outcome: EntryOutcome::Unresolved {
+                doi: "10.1/a".into(),
+                network_error: true,
+            },
+        }];
+        store.save_check(&r, "pdf", "T").unwrap();
+        let docs = store.list_documents().unwrap();
+        let d = docs.iter().find(|d| d.fingerprint == "sha256:net").unwrap();
+        assert_eq!(d.status, "incomplete");
+    }
+
+    #[test]
+    fn delete_document_keeps_doi_cache() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.save_check(&sample(), "pdf", "T").unwrap();
+        store.cache_put("10.1/a", "{\"message\":{}}").unwrap();
+        store.delete_document("sha256:aaa").unwrap();
+        assert!(store.latest_result("sha256:aaa").unwrap().is_none());
+        assert!(store.list_documents().unwrap().is_empty());
+        // The DOI cache must survive.
+        assert_eq!(
+            store.cache_get("10.1/a").unwrap().as_deref(),
+            Some("{\"message\":{}}")
         );
     }
 

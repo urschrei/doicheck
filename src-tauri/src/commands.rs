@@ -198,6 +198,14 @@ pub fn export_report(
     std::fs::write(&path, content).map_err(map_err)
 }
 
+/// Remove a document and its checks from the database. The shared DOI cache is
+/// left intact.
+#[tauri::command]
+pub fn delete_document(state: State<'_, AppState>, fingerprint: String) -> Result<(), String> {
+    let mut store = state.store.lock().map_err(|e| e.to_string())?;
+    store.delete_document(&fingerprint).map_err(map_err)
+}
+
 #[tauri::command]
 pub fn get_reports_dir(state: State<'_, AppState>) -> Result<Option<String>, String> {
     let store = state.store.lock().map_err(|e| e.to_string())?;

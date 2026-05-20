@@ -61,6 +61,7 @@ pub struct Counts {
     pub unresolved: usize,
     pub with_discrepancies: usize,
     pub missing_doi_flagged: usize,
+    pub network_failed: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,9 +95,12 @@ impl CheckResult {
                         c.with_discrepancies += 1;
                     }
                 }
-                EntryOutcome::Unresolved { .. } => {
+                EntryOutcome::Unresolved { network_error, .. } => {
                     c.checkable += 1;
                     c.unresolved += 1;
+                    if *network_error {
+                        c.network_failed += 1;
+                    }
                 }
                 EntryOutcome::NoDoi { suggested } => {
                     if suggested.is_some() {
@@ -180,5 +184,42 @@ mod tests {
         assert_eq!(c.unresolved, 1);
         assert_eq!(c.with_discrepancies, 1);
         assert_eq!(c.missing_doi_flagged, 1);
+    }
+
+    #[test]
+    fn counts_track_network_failures() {
+        let result = CheckResult {
+            filename: "x.pdf".into(),
+            fingerprint: "abc".into(),
+            run_at: "now".into(),
+            bibliography_detected: true,
+            entries: vec![
+                CheckedEntry {
+                    entry: ReferenceEntry {
+                        ordinal: 1,
+                        raw_text: "a".into(),
+                        doi: Some("10.1/a".into()),
+                    },
+                    outcome: EntryOutcome::Unresolved {
+                        doi: "10.1/a".into(),
+                        network_error: true,
+                    },
+                },
+                CheckedEntry {
+                    entry: ReferenceEntry {
+                        ordinal: 2,
+                        raw_text: "b".into(),
+                        doi: Some("10.1/b".into()),
+                    },
+                    outcome: EntryOutcome::Unresolved {
+                        doi: "10.1/b".into(),
+                        network_error: false,
+                    },
+                },
+            ],
+        };
+        let c = result.counts();
+        assert_eq!(c.unresolved, 2);
+        assert_eq!(c.network_failed, 1);
     }
 }

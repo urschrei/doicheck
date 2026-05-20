@@ -35,6 +35,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_documents,
+            commands::delete_document,
             commands::get_email,
             commands::set_email,
             commands::get_reports_dir,
