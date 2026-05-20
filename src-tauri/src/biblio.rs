@@ -5,7 +5,13 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 static HEADING_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?im)^\s*(references|bibliography|works cited|literature cited)\s*$").unwrap()
+    // Optional leading section number or Roman numeral, then the keyword as
+    // effectively the whole line. Trailing dotted leaders/page numbers (a
+    // table-of-contents entry) prevent a match.
+    Regex::new(
+        r"(?im)^\s*(?:\d+\.?\s+|[ivxlcdm]+\.?\s+)?(references|bibliography|works cited|literature cited)\s*$",
+    )
+    .unwrap()
 });
 
 // A numbered marker at the start of an entry, e.g. "[12]" or "12." or "12)".
@@ -114,5 +120,21 @@ mod tests {
         let bib = detect("Just a body with 10.1000/xyz and no heading line.");
         assert!(!bib.detected);
         assert!(bib.entries.is_empty());
+    }
+
+    #[test]
+    fn heading_allows_section_number_but_not_toc() {
+        // Real heading with a section number on its own line.
+        let text = "body\n 6. References  \nAdams, D. (2012). Title. 10.4324/9780203857007";
+        assert!(section_after_heading(text).is_some());
+        // A table-of-contents line (dotted leaders + page number) must NOT match.
+        let toc = "6. References .......................................... 13\nmore body";
+        assert!(section_after_heading(toc).is_none());
+    }
+
+    #[test]
+    fn heading_still_matches_plain_keywords() {
+        assert!(section_after_heading("x\nReferences\n[1] A 10.1000/a").is_some());
+        assert!(section_after_heading("x\nBibliography\nA 10.1000/a").is_some());
     }
 }
