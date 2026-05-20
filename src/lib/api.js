@@ -13,4 +13,8 @@ export const exportReport = (path, fingerprint, format) =>
   invoke("export_report", { path, fingerprint, format });
 export const recheckFailures = (fingerprint) => invoke("recheck_failures", { fingerprint });
 export const deleteDocument = (fingerprint) => invoke("delete_document", { fingerprint });
+export const dismissDiscrepancy = (fingerprint, doi, field) =>
+  invoke("dismiss_discrepancy", { fingerprint, doi, field });
+export const undismissDiscrepancy = (fingerprint, doi, field) =>
+  invoke("undismiss_discrepancy", { fingerprint, doi, field });
 export const onProgress = (handler) => listen("progress", (e) => handler(e.payload));

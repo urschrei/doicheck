@@ -4,7 +4,7 @@
   import { classify, SEVERITY, cacheTally } from "$lib/result.js";
   import EntryCard from "$lib/EntryCard.svelte";
 
-  let { result = null, busy = false, progress = null, currentPath = "", onopen, onrecheck, onrecheckfailures } = $props();
+  let { result = null, busy = false, progress = null, currentPath = "", onopen, onrecheck, onrecheckfailures, ondismiss, onundismiss } = $props();
 
   let filter = $state("all");
   let query = $state("");
@@ -104,7 +104,7 @@
   {/if}
 
   {#each issues as x (x.entry.entry.ordinal)}
-    <EntryCard entry={x.entry} />
+    <EntryCard entry={x.entry} {ondismiss} {onundismiss} />
   {/each}
   {#if issues.length === 0}
     <p class="note">No issues to show.</p>
@@ -116,7 +116,7 @@
     </button>
     {#if showClean}
       {#each cleanOnes as x (x.entry.entry.ordinal)}
-        <EntryCard entry={x.entry} />
+        <EntryCard entry={x.entry} {ondismiss} {onundismiss} />
       {/each}
     {/if}
   {/if}

@@ -89,6 +89,20 @@
     await refresh();
   }
 
+  async function dismissDiscrepancy(doi, field) {
+    if (!result) return;
+    await api.dismissDiscrepancy(result.fingerprint, doi, field);
+    result = await api.latestCheck(result.fingerprint);
+    await refresh();
+  }
+
+  async function undismissDiscrepancy(doi, field) {
+    if (!result) return;
+    await api.undismissDiscrepancy(result.fingerprint, doi, field);
+    result = await api.latestCheck(result.fingerprint);
+    await refresh();
+  }
+
   onMount(() => {
     refresh();
     let unlistenProgress;
@@ -120,6 +134,8 @@
       onopen={openPath}
       onrecheck={() => currentPath && runCheck(currentPath)}
       onrecheckfailures={recheckFailures}
+      ondismiss={dismissDiscrepancy}
+      onundismiss={undismissDiscrepancy}
     />
   </section>
   {#if showSettings}

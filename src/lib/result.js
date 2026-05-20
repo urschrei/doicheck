@@ -4,7 +4,7 @@
 
 export function classify(entry) {
   const o = entry.outcome;
-  if (o.Resolved) return o.Resolved.discrepancies.length ? "mismatch" : "clean";
+  if (o.Resolved) return o.Resolved.discrepancies.some((d) => !d.dismissed) ? "mismatch" : "clean";
   if (o.Unresolved) return o.Unresolved.network_error ? "network" : "unresolved";
   if (o.NoDoi) return o.NoDoi.suggested ? "no_doi_suggested" : "no_doi";
   return "clean";
@@ -29,6 +29,18 @@ export function entryDoi(entry) {
 
 export function discrepancies(entry) {
   return entry.outcome.Resolved ? entry.outcome.Resolved.discrepancies : [];
+}
+
+export function activeDiscrepancies(entry) {
+  return entry.outcome.Resolved
+    ? entry.outcome.Resolved.discrepancies.filter((d) => !d.dismissed)
+    : [];
+}
+
+export function dismissedDiscrepancies(entry) {
+  return entry.outcome.Resolved
+    ? entry.outcome.Resolved.discrepancies.filter((d) => d.dismissed)
+    : [];
 }
 
 export function suggestion(entry) {
