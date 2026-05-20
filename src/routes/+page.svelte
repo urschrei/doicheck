@@ -35,6 +35,22 @@
     }
   }
 
+  async function recheckFailures() {
+    if (!result) return;
+    error = "";
+    busy = true;
+    progress = null;
+    try {
+      result = await api.recheckFailures(result.fingerprint);
+      await refresh();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      busy = false;
+      progress = null;
+    }
+  }
+
   // Opening or dropping a file: show the stored result if this document has
   // been checked before, otherwise run a fresh check.
   async function openPath(path) {
@@ -88,6 +104,7 @@
       {currentPath}
       onopen={openPath}
       onrecheck={() => currentPath && runCheck(currentPath)}
+      onrecheckfailures={recheckFailures}
     />
   </section>
   {#if showSettings}

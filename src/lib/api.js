@@ -11,4 +11,5 @@ export const latestCheck = (fingerprint) => invoke("latest_check", { fingerprint
 export const checkDocument = (path) => invoke("check_document", { path });
 export const exportReport = (path, fingerprint, format) =>
   invoke("export_report", { path, fingerprint, format });
+export const recheckFailures = (fingerprint) => invoke("recheck_failures", { fingerprint });
 export const onProgress = (handler) => listen("progress", (e) => handler(e.payload));
