@@ -7,7 +7,7 @@
   import Settings from "$lib/Settings.svelte";
 
   let documents = $state([]);
-  let report = $state("");
+  let result = $state(null);
   let currentPath = $state("");
   let busy = $state(false);
   let progress = $state(null);
@@ -25,7 +25,7 @@
     progress = null;
     currentPath = path;
     try {
-      report = await api.checkDocument(path);
+      result = await api.checkDocument(path);
       await refresh();
     } catch (e) {
       error = String(e);
@@ -35,7 +35,7 @@
     }
   }
 
-  // Opening or dropping a file: show the stored report if this document has
+  // Opening or dropping a file: show the stored result if this document has
   // been checked before, otherwise run a fresh check.
   async function openPath(path) {
     error = "";
@@ -43,7 +43,7 @@
     try {
       const stored = await api.openDocument(path);
       if (stored) {
-        report = stored;
+        result = stored;
       } else {
         await runCheck(path);
       }
@@ -54,8 +54,8 @@
 
   async function selectDocument(fingerprint) {
     selectedFingerprint = fingerprint;
-    const stored = await api.reportByFingerprint(fingerprint);
-    if (stored) report = stored;
+    const stored = await api.latestCheck(fingerprint);
+    if (stored) result = stored;
   }
 
   onMount(() => {
@@ -82,7 +82,7 @@
   <section class="pane">
     {#if error}<p class="error">{error}</p>{/if}
     <ReportPane
-      {report}
+      {result}
       {busy}
       {progress}
       {currentPath}

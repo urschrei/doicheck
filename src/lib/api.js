@@ -4,9 +4,11 @@ import { listen } from "@tauri-apps/api/event";
 export const listDocuments = () => invoke("list_documents");
 export const getEmail = () => invoke("get_email");
 export const setEmail = (email) => invoke("set_email", { email });
+export const getReportsDir = () => invoke("get_reports_dir");
+export const setReportsDir = (dir) => invoke("set_reports_dir", { dir });
 export const openDocument = (path) => invoke("open_document", { path });
-export const reportByFingerprint = (fingerprint) =>
-  invoke("report_by_fingerprint", { fingerprint });
+export const latestCheck = (fingerprint) => invoke("latest_check", { fingerprint });
 export const checkDocument = (path) => invoke("check_document", { path });
-export const exportReport = (path, text) => invoke("export_report", { path, text });
+export const exportReport = (path, fingerprint, format) =>
+  invoke("export_report", { path, fingerprint, format });
 export const onProgress = (handler) => listen("progress", (e) => handler(e.payload));
