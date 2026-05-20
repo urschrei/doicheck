@@ -1,6 +1,7 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 
 pub mod biblio;
+pub mod cache;
 pub mod commands;
 pub mod compare;
 pub mod crossref;

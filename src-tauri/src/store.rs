@@ -80,6 +80,11 @@ impl Store {
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS crossref_cache (
+                doi TEXT PRIMARY KEY,
+                json TEXT NOT NULL,
+                fetched_at TEXT NOT NULL
+            );
             "#,
         )?;
         let has_result_json: bool = self.conn.query_row(
@@ -113,6 +118,30 @@ impl Store {
             "INSERT INTO settings(key, value) VALUES(?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             params![key, value],
+        )?;
+        Ok(())
+    }
+
+    /// The cached Crossref JSON for a DOI, if present.
+    pub fn cache_get(&self, doi: &str) -> Result<Option<String>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT json FROM crossref_cache WHERE doi = ?1")?;
+        let mut rows = stmt.query(params![doi])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Store (or replace) the Crossref JSON for a DOI.
+    pub fn cache_put(&self, doi: &str, json: &str) -> Result<(), StoreError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO crossref_cache(doi, json, fetched_at) VALUES(?1, ?2, ?3)
+             ON CONFLICT(doi) DO UPDATE SET json = excluded.json, fetched_at = excluded.fetched_at",
+            params![doi, json, now],
         )?;
         Ok(())
     }
@@ -323,6 +352,23 @@ mod tests {
         let got = store.latest_result("sha256:aaa").unwrap();
         assert_eq!(got, Some(r));
         assert_eq!(store.latest_result("sha256:none").unwrap(), None);
+    }
+
+    #[test]
+    fn doi_cache_round_trips() {
+        let store = Store::open_in_memory().unwrap();
+        assert_eq!(store.cache_get("10.1/x").unwrap(), None);
+        store.cache_put("10.1/x", "{\"message\":{}}").unwrap();
+        assert_eq!(
+            store.cache_get("10.1/x").unwrap().as_deref(),
+            Some("{\"message\":{}}")
+        );
+        // Replacing updates the value.
+        store.cache_put("10.1/x", "{\"v\":2}").unwrap();
+        assert_eq!(
+            store.cache_get("10.1/x").unwrap().as_deref(),
+            Some("{\"v\":2}")
+        );
     }
 
     #[test]
