@@ -39,6 +39,6 @@
   .rowmain { display: grid; grid-template-columns: 16px 1fr; gap: 4px; padding: 6px 10px; flex: 1; border: 0; background: transparent; text-align: left; cursor: pointer; font: inherit; }
   .name { font-weight: 600; }
   .when { grid-column: 2; color: #888; font-size: 11px; }
-  .del { border: 0; background: transparent; color: #b00020; cursor: pointer; padding: 0 10px; visibility: hidden; font-size: 12px; }
-  .row:hover .del { visibility: visible; }
+  .del { border: 0; background: transparent; color: #aaa; cursor: pointer; padding: 0 10px; font-size: 12px; }
+  .del:hover { color: #b00020; }
 </style>
