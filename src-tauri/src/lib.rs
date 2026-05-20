@@ -1,6 +1,7 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 
 pub mod biblio;
+pub mod commands;
 pub mod compare;
 pub mod crossref;
 pub mod doi;
@@ -11,16 +12,34 @@ pub mod pipeline;
 pub mod report;
 pub mod store;
 pub mod text;
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
+
+use commands::AppState;
+use std::sync::Mutex;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet])
+        .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            let dir = app.path().app_data_dir().expect("app data dir");
+            std::fs::create_dir_all(&dir)?;
+            let store = store::Store::open(&dir.join("doicheck.sqlite3")).expect("open store");
+            app.manage(AppState {
+                store: Mutex::new(store),
+            });
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            commands::list_documents,
+            commands::get_email,
+            commands::set_email,
+            commands::open_document,
+            commands::report_by_fingerprint,
+            commands::check_document,
+            commands::export_report,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
