@@ -1,5 +1,6 @@
 //! Orchestration: extracted text -> bibliography -> per-entry Crossref checks.
 
+use crate::cache::DoiCache;
 use crate::compare::compare;
 use crate::crossref::{CrossrefClient, CrossrefError};
 use crate::model::{CheckResult, CheckedEntry, EntryOutcome, Progress, SuggestedDoi};
@@ -14,6 +15,7 @@ pub async fn run(
     run_at: String,
     text: &str,
     client: &CrossrefClient,
+    cache: &(impl DoiCache + Sync),
     mut progress: impl FnMut(Progress),
 ) -> CheckResult {
     let bib = crate::biblio::detect(text);
@@ -24,27 +26,41 @@ pub async fn run(
     let mut checked = Vec::with_capacity(total);
     for (i, entry) in raw_entries.into_iter().enumerate() {
         let outcome = match &entry.doi {
-            Some(doi) => match client.resolve(doi).await {
-                Ok(meta) => {
-                    let discrepancies = if crate::text::is_comparable(&entry.raw_text) {
-                        compare(&entry.raw_text, &meta)
-                    } else {
-                        Vec::new()
-                    };
-                    EntryOutcome::Resolved {
-                        doi: doi.clone(),
-                        discrepancies,
+            Some(doi) => {
+                // Cache first; only hit the network for unknown DOIs.
+                let json = match cache.get(doi) {
+                    Some(j) => Ok(j),
+                    None => {
+                        let fetched = client.resolve_json(doi).await;
+                        if let Ok(ref j) = fetched {
+                            cache.put(doi, j);
+                        }
+                        fetched
                     }
+                };
+                match json {
+                    Ok(body) => {
+                        let meta = crate::crossref::metadata_from_json(&body);
+                        let discrepancies = if crate::text::is_comparable(&entry.raw_text) {
+                            compare(&entry.raw_text, &meta)
+                        } else {
+                            Vec::new()
+                        };
+                        EntryOutcome::Resolved {
+                            doi: doi.clone(),
+                            discrepancies,
+                        }
+                    }
+                    Err(CrossrefError::NotFound) => EntryOutcome::Unresolved {
+                        doi: doi.clone(),
+                        network_error: false,
+                    },
+                    Err(CrossrefError::Network(_)) => EntryOutcome::Unresolved {
+                        doi: doi.clone(),
+                        network_error: true,
+                    },
                 }
-                Err(CrossrefError::NotFound) => EntryOutcome::Unresolved {
-                    doi: doi.clone(),
-                    network_error: false,
-                },
-                Err(CrossrefError::Network(_)) => EntryOutcome::Unresolved {
-                    doi: doi.clone(),
-                    network_error: true,
-                },
-            },
+            }
             None => {
                 let suggested = match client.search(&entry.raw_text).await {
                     Ok(Some(hit)) if !hit.doi.is_empty() => {
@@ -84,6 +100,7 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cache::MemoryCache;
     use wiremock::matchers::{method, path_regex, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -104,6 +121,7 @@ mod tests {
             .mount(&server)
             .await;
         let client = CrossrefClient::with_base("", server.uri());
+        let cache = MemoryCache::default();
 
         let text = "References\n[1] Smith J (2020). A Study of Widgets. 10.1000/abc";
         let mut updates = Vec::new();
@@ -113,6 +131,7 @@ mod tests {
             "now".into(),
             text,
             &client,
+            &cache,
             |p| updates.push(p.done),
         )
         .await;
@@ -141,6 +160,7 @@ mod tests {
             .mount(&server)
             .await;
         let client = CrossrefClient::with_base("", server.uri());
+        let cache = MemoryCache::default();
 
         let text = "References\nSmith J. A Study of Widgets. Journal of Widgets.";
         let result = run(
@@ -149,6 +169,7 @@ mod tests {
             "now".into(),
             text,
             &client,
+            &cache,
             |_| {},
         )
         .await;
@@ -179,6 +200,7 @@ mod tests {
             .mount(&server)
             .await;
         let client = CrossrefClient::with_base("", server.uri());
+        let cache = MemoryCache::default();
 
         // No "References" heading: the fallback window must carry the entry text,
         // so the matching metadata yields NO discrepancies (not a false positive).
@@ -189,6 +211,7 @@ mod tests {
             "now".into(),
             text,
             &client,
+            &cache,
             |_| {},
         )
         .await;
@@ -199,5 +222,87 @@ mod tests {
             EntryOutcome::Resolved { discrepancies, .. } => assert!(discrepancies.is_empty()),
             other => panic!("expected Resolved, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn cache_hit_skips_network() {
+        // No mocks mounted: any real request would 404 -> Unresolved. A cache
+        // hit must yield Resolved without touching the network.
+        let server = MockServer::start().await;
+        let cache = MemoryCache::default();
+        cache.put(
+            "10.1000/abc",
+            &serde_json::json!({"message":{"title":["Cached"],"DOI":"10.1000/abc"}}).to_string(),
+        );
+        let client = CrossrefClient::with_base("", server.uri());
+        let text = "References\n[1] Smith J (2020). A Study of Widgets. 10.1000/abc";
+        let result = run(
+            "a.pdf".into(),
+            "fp".into(),
+            "now".into(),
+            text,
+            &client,
+            &cache,
+            |_| {},
+        )
+        .await;
+        assert!(matches!(
+            result.entries[0].outcome,
+            EntryOutcome::Resolved { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn successful_resolve_populates_cache() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"/works/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "message": { "title": ["A Study of Widgets"], "DOI": "10.1000/abc" }
+            })))
+            .mount(&server)
+            .await;
+        let client = CrossrefClient::with_base("", server.uri());
+        let cache = MemoryCache::default();
+        let text = "References\n[1] Smith J (2020). A Study of Widgets. 10.1000/abc";
+        let _ = run(
+            "a.pdf".into(),
+            "fp".into(),
+            "now".into(),
+            text,
+            &client,
+            &cache,
+            |_| {},
+        )
+        .await;
+        assert!(cache.get("10.1000/abc").is_some());
+    }
+
+    #[tokio::test]
+    async fn transient_failure_is_not_cached() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"/works/.*"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        let client = CrossrefClient::with_base("", server.uri());
+        let cache = MemoryCache::default();
+        let text = "References\n[1] Smith J (2020). A Study of Widgets. 10.1000/abc";
+        let result = run(
+            "a.pdf".into(),
+            "fp".into(),
+            "now".into(),
+            text,
+            &client,
+            &cache,
+            |_| {},
+        )
+        .await;
+        match &result.entries[0].outcome {
+            EntryOutcome::Unresolved { network_error, .. } => assert!(*network_error),
+            other => panic!("expected transient Unresolved, got {other:?}"),
+        }
+        assert!(cache.get("10.1000/abc").is_none());
     }
 }

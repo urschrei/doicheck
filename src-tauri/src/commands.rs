@@ -1,5 +1,6 @@
 //! Tauri command handlers bridging the UI to the pipeline and store.
 
+use crate::cache::StoreCache;
 use crate::crossref::CrossrefClient;
 use crate::model::Progress;
 use crate::store::{DocumentSummary, Store};
@@ -84,6 +85,9 @@ pub async fn check_document(
     let client = CrossrefClient::new(&email);
     let run_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
+    let cache = StoreCache {
+        store: &state.store,
+    };
     let app_for_progress = app.clone();
     let result = crate::pipeline::run(
         ingested.filename.clone(),
@@ -91,6 +95,7 @@ pub async fn check_document(
         run_at,
         &text,
         &client,
+        &cache,
         move |p: Progress| {
             let _ = app_for_progress.emit("progress", p);
         },
