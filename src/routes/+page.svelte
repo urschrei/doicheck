@@ -6,6 +6,7 @@
   import Sidebar from "$lib/Sidebar.svelte";
   import ReportPane from "$lib/ReportPane.svelte";
   import Settings from "$lib/Settings.svelte";
+  import { checkForUpdate } from "$lib/update.js";
 
   let documents = $state([]);
   let result = $state(null);
@@ -105,6 +106,7 @@
 
   onMount(() => {
     refresh();
+    checkForUpdate();
     let unlistenProgress;
     let unlistenDrag;
     (async () => {
