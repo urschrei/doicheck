@@ -58,7 +58,8 @@ impl Store {
                 unresolved INTEGER NOT NULL,
                 with_discrepancies INTEGER NOT NULL,
                 missing_doi_flagged INTEGER NOT NULL,
-                report_text TEXT NOT NULL
+                report_text TEXT NOT NULL,
+                result_json TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS entries (
                 id INTEGER PRIMARY KEY,
@@ -81,6 +82,17 @@ impl Store {
             );
             "#,
         )?;
+        let has_result_json: bool = self.conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('checks') WHERE name = 'result_json'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )? > 0;
+        if !has_result_json {
+            self.conn.execute(
+                "ALTER TABLE checks ADD COLUMN result_json TEXT NOT NULL DEFAULT ''",
+                [],
+            )?;
+        }
         Ok(())
     }
 
@@ -130,8 +142,8 @@ impl Store {
         )?;
         tx.execute(
             "INSERT INTO checks(document_id, run_at, total, checkable, resolved,
-                 unresolved, with_discrepancies, missing_doi_flagged, report_text)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                 unresolved, with_discrepancies, missing_doi_flagged, report_text, result_json)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
             params![
                 document_id,
                 result.run_at,
@@ -141,7 +153,8 @@ impl Store {
                 counts.unresolved as i64,
                 counts.with_discrepancies as i64,
                 counts.missing_doi_flagged as i64,
-                report_text
+                report_text,
+                serde_json::to_string(result).unwrap_or_default()
             ],
         )?;
         let check_id = tx.last_insert_rowid();
@@ -198,6 +211,27 @@ impl Store {
             Ok(Some(row.get(0)?))
         } else {
             Ok(None)
+        }
+    }
+
+    /// The most recent structured result for a document, by fingerprint.
+    pub fn latest_result(
+        &self,
+        fingerprint: &str,
+    ) -> Result<Option<crate::model::CheckResult>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT c.result_json FROM checks c
+             JOIN documents d ON d.id = c.document_id
+             WHERE d.fingerprint = ?1
+             ORDER BY c.id DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![fingerprint])?;
+        match rows.next()? {
+            Some(row) => {
+                let json: String = row.get(0)?;
+                Ok(serde_json::from_str(&json).ok())
+            }
+            None => Ok(None),
         }
     }
 
@@ -279,5 +313,28 @@ mod tests {
             store.get_setting("crossref_email").unwrap().as_deref(),
             Some("me@example.com")
         );
+    }
+
+    #[test]
+    fn save_then_retrieve_structured_result() {
+        let mut store = Store::open_in_memory().unwrap();
+        let r = sample();
+        store.save_check(&r, "pdf", "REPORT TEXT").unwrap();
+        let got = store.latest_result("sha256:aaa").unwrap();
+        assert_eq!(got, Some(r));
+        assert_eq!(store.latest_result("sha256:none").unwrap(), None);
+    }
+
+    #[test]
+    fn migrate_is_idempotent_on_a_persisted_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("d.sqlite3");
+        {
+            let mut s = Store::open(&path).unwrap();
+            s.save_check(&sample(), "pdf", "T").unwrap();
+        }
+        // Reopen: migrate must run again without error and data persists.
+        let s = Store::open(&path).unwrap();
+        assert!(s.latest_result("sha256:aaa").unwrap().is_some());
     }
 }
