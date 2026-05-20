@@ -32,6 +32,22 @@ pub fn token_coverage(haystack: &str, needle: &str) -> f64 {
     found as f64 / need.len() as f64
 }
 
+/// Whether a reference string has enough non-identifier text to compare against
+/// Crossref metadata. Strips URL/DOI tokens, then requires a minimum count of
+/// alphanumeric characters. Prevents false discrepancies for entries whose only
+/// content is a DOI (e.g. a sparse fallback window).
+pub fn is_comparable(reference: &str) -> bool {
+    let without_ids: String = reference
+        .split_whitespace()
+        .filter(|t| {
+            let l = t.to_ascii_lowercase();
+            !l.starts_with("http") && !l.starts_with("10.") && !l.contains("doi.org")
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    without_ids.chars().filter(|c| c.is_alphanumeric()).count() >= 15
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -46,5 +62,14 @@ mod tests {
         let haystack = "smith j a study of widgets journal 2020";
         assert_eq!(token_coverage(haystack, "a study of widgets"), 1.0);
         assert!((token_coverage(haystack, "a study of gadgets") - 0.75).abs() < 1e-9);
+    }
+
+    #[test]
+    fn is_comparable_requires_real_text() {
+        assert!(!is_comparable("10.1000/abc"));
+        assert!(!is_comparable("https://doi.org/10.1000/abc"));
+        assert!(is_comparable(
+            "Smith, J. (2020). A Study of Widgets. Journal of Widgets."
+        ));
     }
 }
