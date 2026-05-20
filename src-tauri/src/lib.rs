@@ -1,5 +1,6 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 
+pub mod biblio;
 pub mod doi;
 pub mod extract;
 pub mod ingest;
