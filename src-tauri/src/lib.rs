@@ -6,6 +6,7 @@ pub mod doi;
 pub mod extract;
 pub mod ingest;
 pub mod model;
+pub mod report;
 pub mod text;
 #[tauri::command]
 fn greet(name: &str) -> String {
