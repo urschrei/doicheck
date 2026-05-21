@@ -1,6 +1,7 @@
 <script>
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { classify, SEVERITY, entryDoi, activeDiscrepancies, dismissedDiscrepancies, suggestion, llmSource } from "$lib/result.js";
+  import { linkifyParts } from "$lib/linkify.js";
 
   let { entry, ondismiss, onundismiss } = $props();
 
@@ -11,19 +12,6 @@
   const dismissed = $derived(dismissedDiscrepancies(entry));
   const sugg = $derived(suggestion(entry));
   const llm = $derived(llmSource(entry));
-
-  const URL_RE = /(https?:\/\/[^\s)]+)/g;
-  function parts(text) {
-    const out = [];
-    let last = 0;
-    for (const m of text.matchAll(URL_RE)) {
-      if (m.index > last) out.push({ t: text.slice(last, m.index) });
-      out.push({ url: m[0] });
-      last = m.index + m[0].length;
-    }
-    if (last < text.length) out.push({ t: text.slice(last) });
-    return out;
-  }
 
   function open(url) {
     openUrl(url);
@@ -50,7 +38,7 @@
 
   {#if entry.entry.raw_text}
     <p class="srclabel">Text in document:</p>
-    <blockquote class="ref">{#each parts(entry.entry.raw_text) as p}{#if p.url}<a class="link" href={p.url} onclick={(e) => { e.preventDefault(); open(p.url); }}>{p.url}</a>{:else}{p.t}{/if}{/each}</blockquote>
+    <blockquote class="ref">{#each linkifyParts(entry.entry.raw_text) as p}{#if p.url}<a class="link" href={p.url} onclick={(e) => { e.preventDefault(); open(p.url); }}>{p.url}</a>{:else}{p.t}{/if}{/each}</blockquote>
   {/if}
 
   {#if active.length}
