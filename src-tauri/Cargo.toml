@@ -38,6 +38,7 @@ urlencoding = "2.1.3"
 tauri-plugin-dialog = "2.7.1"
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"
+pdfium-render = { version = "0.9.1", default-features = false, features = ["pdfium_latest"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
