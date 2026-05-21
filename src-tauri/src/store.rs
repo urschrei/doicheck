@@ -1,7 +1,7 @@
 //! SQLite persistence for documents, checks, entries, discrepancies, settings.
 
 use crate::model::{CheckResult, EntryOutcome};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -411,9 +411,12 @@ impl Store {
             let status = match self.latest_result(&fingerprint)? {
                 Some(result) => {
                     let c = result.counts();
+                    let not_found = c.unresolved.saturating_sub(c.network_failed);
                     if c.network_failed > 0 {
                         "incomplete"
-                    } else if c.with_discrepancies > 0 || c.unresolved > 0 {
+                    } else if not_found > 0 {
+                        "failed"
+                    } else if c.with_discrepancies > 0 {
                         "has-issues"
                     } else {
                         "clean"
@@ -554,6 +557,29 @@ mod tests {
         let docs = store.list_documents().unwrap();
         let d = docs.iter().find(|d| d.fingerprint == "sha256:net").unwrap();
         assert_eq!(d.status, "incomplete");
+    }
+
+    #[test]
+    fn status_failed_when_doi_not_found() {
+        let mut store = Store::open_in_memory().unwrap();
+        let mut r = sample();
+        r.fingerprint = "sha256:nf".into();
+        r.entries = vec![CheckedEntry {
+            entry: ReferenceEntry {
+                ordinal: 1,
+                raw_text: "x".into(),
+                doi: Some("10.1/a".into()),
+            },
+            outcome: EntryOutcome::Unresolved {
+                doi: "10.1/a".into(),
+                network_error: false,
+            },
+            llm_source: None,
+        }];
+        store.save_check(&r, "pdf", "T").unwrap();
+        let docs = store.list_documents().unwrap();
+        let d = docs.iter().find(|d| d.fingerprint == "sha256:nf").unwrap();
+        assert_eq!(d.status, "failed");
     }
 
     #[test]

@@ -4,7 +4,7 @@
   function meta(status) {
     if (status === "incomplete") return { glyph: "↻", colour: "var(--sev-incomplete)", title: "Interrupted - re-check failures" };
     if (status === "has-issues") return { glyph: "●", colour: "var(--sev-warn)", title: "Has issues" };
-    if (status === "failed") return { glyph: "●", colour: "var(--sev-fail)", title: "Check failed" };
+    if (status === "failed") return { glyph: "●", colour: "var(--sev-fail)", title: "DOI not found on Crossref" };
     return { glyph: "●", colour: "var(--sev-ok)", title: "Clean" };
   }
 </script>

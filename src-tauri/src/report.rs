@@ -3,6 +3,20 @@
 use crate::model::{CheckResult, EntryOutcome};
 use std::fmt::Write;
 
+/// A single-line, length-limited identifier for a reference, derived from its
+/// raw text: internal whitespace collapsed and truncated to `MAX` characters
+/// with a trailing ellipsis when truncated.
+fn snippet(raw: &str) -> String {
+    const MAX: usize = 80;
+    let collapsed = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= MAX {
+        collapsed
+    } else {
+        let truncated: String = collapsed.chars().take(MAX).collect();
+        format!("{truncated}…")
+    }
+}
+
 pub fn render(result: &CheckResult) -> String {
     let c = result.counts();
     let mut s = String::new();
@@ -39,6 +53,35 @@ pub fn render(result: &CheckResult) -> String {
     if c.llm_flagged > 0 {
         let _ = writeln!(s, "  Possible AI sources flagged: {}", c.llm_flagged);
     }
+    let retry_ords: Vec<String> = result
+        .entries
+        .iter()
+        .filter_map(|e| {
+            if let EntryOutcome::Unresolved {
+                network_error: true,
+                ..
+            } = &e.outcome
+            {
+                Some(format!("[{}]", e.entry.ordinal))
+            } else {
+                None
+            }
+        })
+        .collect();
+    if !retry_ords.is_empty() {
+        let noun = if retry_ords.len() == 1 {
+            "entry"
+        } else {
+            "entries"
+        };
+        let _ = writeln!(
+            s,
+            "  Note: {} {} could not be checked (network or capacity) and should be re-checked: {}",
+            retry_ords.len(),
+            noun,
+            retry_ords.join(", ")
+        );
+    }
     let _ = writeln!(s);
 
     let _ = writeln!(s, "Discrepancies");
@@ -49,17 +92,19 @@ pub fn render(result: &CheckResult) -> String {
                 doi, discrepancies, ..
             } if discrepancies.iter().any(|d| !d.dismissed) => {
                 any_disc = true;
+                let indent = " ".repeat(format!("  [{}] ", e.entry.ordinal).len());
+                let _ = writeln!(s, "  [{}] {}", e.entry.ordinal, snippet(&e.entry.raw_text));
                 for d in discrepancies.iter().filter(|d| !d.dismissed) {
                     let _ = writeln!(
                         s,
-                        "  [{}] {}  {}: ref {} vs Crossref \"{}\"",
-                        e.entry.ordinal, doi, d.field, d.reference_value, d.crossref_value
+                        "{indent}{}  {}: ref \"{}\" vs Crossref \"{}\"",
+                        doi, d.field, d.reference_value, d.crossref_value
                     );
                 }
                 if let Some(marker) = &e.llm_source {
                     let _ = writeln!(
                         s,
-                        "    ** POSSIBLE AI SOURCE - reference URL contains \"{}\" **",
+                        "{indent}** POSSIBLE AI SOURCE - reference URL contains \"{}\" **",
                         marker
                     );
                 }
@@ -67,15 +112,17 @@ pub fn render(result: &CheckResult) -> String {
             EntryOutcome::Unresolved { doi, network_error } => {
                 any_disc = true;
                 let reason = if *network_error {
-                    "check failed (network)"
+                    "could not be checked — retry needed"
                 } else {
-                    "not found on Crossref"
+                    "DOI not found on Crossref"
                 };
-                let _ = writeln!(s, "  [{}] {}  {}", e.entry.ordinal, doi, reason);
+                let indent = " ".repeat(format!("  [{}] ", e.entry.ordinal).len());
+                let _ = writeln!(s, "  [{}] {}", e.entry.ordinal, snippet(&e.entry.raw_text));
+                let _ = writeln!(s, "{indent}{}  {}", doi, reason);
                 if let Some(marker) = &e.llm_source {
                     let _ = writeln!(
                         s,
-                        "    ** POSSIBLE AI SOURCE - reference URL contains \"{}\" **",
+                        "{indent}** POSSIBLE AI SOURCE - reference URL contains \"{}\" **",
                         marker
                     );
                 }
@@ -83,10 +130,12 @@ pub fn render(result: &CheckResult) -> String {
             _ => {
                 if let Some(marker) = &e.llm_source {
                     any_disc = true;
+                    let indent = " ".repeat(format!("  [{}] ", e.entry.ordinal).len());
+                    let _ = writeln!(s, "  [{}] {}", e.entry.ordinal, snippet(&e.entry.raw_text));
                     let _ = writeln!(
                         s,
-                        "  [{}]   ** POSSIBLE AI SOURCE - reference URL contains \"{}\" **",
-                        e.entry.ordinal, marker
+                        "{indent}** POSSIBLE AI SOURCE - reference URL contains \"{}\" **",
+                        marker
                     );
                 }
             }
@@ -105,10 +154,12 @@ pub fn render(result: &CheckResult) -> String {
         } = &e.outcome
         {
             any_missing = true;
+            let indent = " ".repeat(format!("  [{}] ", e.entry.ordinal).len());
+            let _ = writeln!(s, "  [{}] {}", e.entry.ordinal, snippet(&e.entry.raw_text));
             let _ = writeln!(
                 s,
-                "  [{}] no DOI; closest Crossref match {} (title match {}%)",
-                e.entry.ordinal, sug.doi, sug.title_match
+                "{indent}no DOI; closest Crossref match {} (title match {}%)",
+                sug.doi, sug.title_match
             );
         }
     }
@@ -135,7 +186,7 @@ mod tests {
                 CheckedEntry {
                     entry: ReferenceEntry {
                         ordinal: 12,
-                        raw_text: "r".into(),
+                        raw_text: "Smith, J. (2020). Neural things. Journal.".into(),
                         doi: Some("10.1/yyy".into()),
                     },
                     outcome: EntryOutcome::Resolved {
@@ -153,7 +204,7 @@ mod tests {
                 CheckedEntry {
                     entry: ReferenceEntry {
                         ordinal: 33,
-                        raw_text: "r".into(),
+                        raw_text: "Lee, C. (2018). Untitled work.".into(),
                         doi: None,
                     },
                     outcome: EntryOutcome::NoDoi {
@@ -168,9 +219,78 @@ mod tests {
         };
         let text = render(&result);
         assert!(text.contains("Document:     thesis.pdf"));
-        assert!(text.contains("[12] 10.1/yyy  title:"));
+        assert!(text.contains("[12] Smith, J. (2020). Neural things. Journal."));
+        assert!(text.contains("10.1/yyy  title:"));
         assert!(text.contains("Neural Things"));
-        assert!(text.contains("[33] no DOI; closest Crossref match 10.1000/xyz (title match 82%)"));
+        assert!(text.contains("[33] Lee, C. (2018). Untitled work."));
+        assert!(text.contains("no DOI; closest Crossref match 10.1000/xyz (title match 82%)"));
         assert!(text.contains("from cache:"));
+    }
+
+    #[test]
+    fn renders_retry_note_and_unresolved_wording() {
+        let result = CheckResult {
+            filename: "x.pdf".into(),
+            fingerprint: "fp".into(),
+            run_at: "now".into(),
+            bibliography_detected: true,
+            entries: vec![
+                CheckedEntry {
+                    entry: ReferenceEntry {
+                        ordinal: 7,
+                        raw_text: "Brown, B. (2021). Unreachable.".into(),
+                        doi: Some("10.3/www".into()),
+                    },
+                    outcome: EntryOutcome::Unresolved {
+                        doi: "10.3/www".into(),
+                        network_error: true,
+                    },
+                    llm_source: None,
+                },
+                CheckedEntry {
+                    entry: ReferenceEntry {
+                        ordinal: 9,
+                        raw_text: "Jones, A. (2019). Missing DOI.".into(),
+                        doi: Some("10.2/zzz".into()),
+                    },
+                    outcome: EntryOutcome::Unresolved {
+                        doi: "10.2/zzz".into(),
+                        network_error: false,
+                    },
+                    llm_source: None,
+                },
+            ],
+        };
+        let text = render(&result);
+        assert!(text.contains("could not be checked — retry needed"));
+        assert!(text.contains("DOI not found on Crossref"));
+        assert!(text.contains("[7] Brown, B. (2021). Unreachable."));
+        assert!(text.contains(
+            "Note: 1 entry could not be checked (network or capacity) and should be re-checked: [7]"
+        ));
+        // The genuine 404 (ordinal 9) must not be listed as needing a re-check.
+        assert!(!text.contains("re-checked: [9]"));
+        assert!(!text.contains("[7], [9]"));
+        // Two-line layout: each detail sits on its own continuation line.
+        assert!(text.contains("10.3/www  could not be checked — retry needed"));
+        assert!(text.contains("10.2/zzz  DOI not found on Crossref"));
+    }
+
+    #[test]
+    fn snippet_keeps_short_text() {
+        assert_eq!(snippet("Smith 2020"), "Smith 2020");
+    }
+
+    #[test]
+    fn snippet_collapses_whitespace() {
+        assert_eq!(snippet("Smith,\n  J.   (2020)"), "Smith, J. (2020)");
+    }
+
+    #[test]
+    fn snippet_truncates_long_text() {
+        let long = "a".repeat(200);
+        let s = snippet(&long);
+        assert_eq!(s.chars().count(), 81); // 80 chars + ellipsis
+        assert!(s.ends_with('…'));
     }
 }

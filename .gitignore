@@ -8,3 +8,4 @@ src-tauri/target/
 src-tauri/pdfium/*
 !src-tauri/pdfium/README.md
 .claude/settings.local.json
+rust_out

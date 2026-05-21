@@ -7,9 +7,11 @@ pub fn to_json(result: &CheckResult) -> String {
     serde_json::to_string_pretty(result).unwrap_or_default()
 }
 
-/// One row per entry: ordinal, doi, status, unmatched fields, suggested doi, llm_source.
+/// One row per entry: ordinal, reference_text, doi, status, unmatched fields, suggested doi, llm_source.
 pub fn to_csv(result: &CheckResult) -> String {
-    let mut out = String::from("ordinal,doi,status,unmatched_fields,suggested_doi,llm_source\n");
+    let mut out = String::from(
+        "ordinal,reference_text,doi,status,unmatched_fields,suggested_doi,llm_source\n",
+    );
     for e in &result.entries {
         let (status, unmatched, suggested) = match &e.outcome {
             EntryOutcome::Resolved { discrepancies, .. } => {
@@ -30,7 +32,7 @@ pub fn to_csv(result: &CheckResult) -> String {
             }
             EntryOutcome::Unresolved { network_error, .. } => (
                 if *network_error {
-                    "network_error"
+                    "retry_needed"
                 } else {
                     "not_found"
                 }
@@ -49,8 +51,9 @@ pub fn to_csv(result: &CheckResult) -> String {
         };
         let llm = e.llm_source.as_deref().unwrap_or("");
         out.push_str(&format!(
-            "{},{},{},{},{},{}\n",
+            "{},{},{},{},{},{},{}\n",
             e.entry.ordinal,
+            csv_field(&e.entry.raw_text),
             csv_field(e.entry.doi.as_deref().unwrap_or("")),
             status,
             csv_field(&unmatched),
@@ -61,9 +64,9 @@ pub fn to_csv(result: &CheckResult) -> String {
     out
 }
 
-/// Quote a CSV field if it contains a comma, quote, or newline.
+/// Quote a CSV field if it contains a comma, quote, newline, or carriage return.
 fn csv_field(s: &str) -> String {
-    if s.contains([',', '"', '\n']) {
+    if s.contains([',', '"', '\n', '\r']) {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
         s.to_string()
@@ -137,11 +140,83 @@ mod tests {
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(
             lines[0],
-            "ordinal,doi,status,unmatched_fields,suggested_doi,llm_source"
+            "ordinal,reference_text,doi,status,unmatched_fields,suggested_doi,llm_source"
         );
-        assert_eq!(lines[1], "1,10.1000/a,clean,,,");
-        assert_eq!(lines[2], "2,10.1000/b,mismatch,year,,");
-        assert_eq!(lines[3], "3,,no_doi,,10.1000/c,");
+        assert_eq!(lines[1], "1,r,10.1000/a,clean,,,");
+        assert_eq!(lines[2], "2,r,10.1000/b,mismatch,year,,");
+        assert_eq!(lines[3], "3,r,,no_doi,,10.1000/c,");
+    }
+
+    #[test]
+    fn csv_distinguishes_retry_from_not_found() {
+        let r = CheckResult {
+            filename: "x.pdf".into(),
+            fingerprint: "fp".into(),
+            run_at: "now".into(),
+            bibliography_detected: true,
+            entries: vec![
+                CheckedEntry {
+                    entry: ReferenceEntry {
+                        ordinal: 1,
+                        raw_text: "transient".into(),
+                        doi: Some("10.1/a".into()),
+                    },
+                    outcome: EntryOutcome::Unresolved {
+                        doi: "10.1/a".into(),
+                        network_error: true,
+                    },
+                    llm_source: None,
+                },
+                CheckedEntry {
+                    entry: ReferenceEntry {
+                        ordinal: 2,
+                        raw_text: "missing".into(),
+                        doi: Some("10.1/b".into()),
+                    },
+                    outcome: EntryOutcome::Unresolved {
+                        doi: "10.1/b".into(),
+                        network_error: false,
+                    },
+                    llm_source: None,
+                },
+            ],
+        };
+        let lines: Vec<String> = to_csv(&r).lines().map(|l| l.to_string()).collect();
+        assert_eq!(lines[1], "1,transient,10.1/a,retry_needed,,,");
+        assert_eq!(lines[2], "2,missing,10.1/b,not_found,,,");
+    }
+
+    #[test]
+    fn csv_field_quotes_carriage_return() {
+        assert_eq!(csv_field("a\rb"), "\"a\rb\"");
+    }
+
+    #[test]
+    fn csv_quotes_reference_text_with_commas() {
+        let r = CheckResult {
+            filename: "x.pdf".into(),
+            fingerprint: "fp".into(),
+            run_at: "now".into(),
+            bibliography_detected: true,
+            entries: vec![CheckedEntry {
+                entry: ReferenceEntry {
+                    ordinal: 1,
+                    raw_text: "Smith, J. (2020). Neural things.".into(),
+                    doi: Some("10.1/a".into()),
+                },
+                outcome: EntryOutcome::Resolved {
+                    doi: "10.1/a".into(),
+                    discrepancies: vec![],
+                    from_cache: false,
+                },
+                llm_source: None,
+            }],
+        };
+        let lines: Vec<String> = to_csv(&r).lines().map(|l| l.to_string()).collect();
+        assert_eq!(
+            lines[1],
+            "1,\"Smith, J. (2020). Neural things.\",10.1/a,clean,,,"
+        );
     }
 
     #[test]
