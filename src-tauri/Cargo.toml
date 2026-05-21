@@ -3,7 +3,7 @@ name = "doicheck"
 version = "0.3.0"
 description = "Check the DOIs in a document's bibliography against Crossref"
 authors = ["Stephan Hügel"]
-edition = "2021"
+edition = "2024"
 license = "BlueOak-1.0.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
