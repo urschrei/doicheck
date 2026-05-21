@@ -114,6 +114,8 @@ pub fn run() {
             commands::set_email,
             commands::get_reports_dir,
             commands::set_reports_dir,
+            commands::get_concurrency,
+            commands::set_concurrency,
             commands::open_document,
             commands::latest_check,
             commands::check_document,

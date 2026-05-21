@@ -5,6 +5,8 @@ use crate::compare::compare;
 use crate::crossref::{CrossrefClient, CrossrefError};
 use crate::model::{CheckResult, CheckedEntry, EntryOutcome, Progress, SuggestedDoi};
 use crate::text::token_coverage;
+use futures::stream::{self, StreamExt};
+use std::collections::HashSet;
 
 const SUGGEST_THRESHOLD: f64 = 0.8;
 
@@ -51,6 +53,39 @@ async fn resolve_doi_outcome(
     }
 }
 
+/// Per-entry logic: resolve a DOI or search for one, returning an `EntryOutcome`.
+async fn outcome_for_entry(
+    entry: &crate::model::ReferenceEntry,
+    client: &CrossrefClient,
+    cache: &(impl DoiCache + Sync),
+) -> EntryOutcome {
+    match &entry.doi {
+        Some(doi) => resolve_doi_outcome(doi, &entry.raw_text, client, cache).await,
+        None => {
+            let suggested = match client.search(&entry.raw_text).await {
+                Ok(Some(hit)) if !hit.doi.is_empty() => {
+                    let cov = hit
+                        .metadata
+                        .title
+                        .as_deref()
+                        .map(|t| token_coverage(&entry.raw_text, t))
+                        .unwrap_or(0.0);
+                    if cov >= SUGGEST_THRESHOLD {
+                        Some(SuggestedDoi {
+                            doi: hit.doi,
+                            title_match: (cov * 100.0).round() as u8,
+                        })
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+            EntryOutcome::NoDoi { suggested }
+        }
+    }
+}
+
 /// Re-resolve only the entries that previously failed transiently (network /
 /// capacity). Operates on a stored result, so it needs no document re-read.
 /// Other entries (resolved, not-found, no-DOI) are left unchanged.
@@ -58,21 +93,32 @@ pub async fn recheck_failures(
     mut result: CheckResult,
     client: &CrossrefClient,
     cache: &(impl crate::cache::DoiCache + Sync),
+    concurrency: usize,
     mut progress: impl FnMut(Progress),
 ) -> CheckResult {
     let total = result.entries.len();
+    let retry: HashSet<usize> = result
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|(_, ce)| {
+            matches!(
+                &ce.outcome,
+                EntryOutcome::Unresolved {
+                    network_error: true,
+                    ..
+                }
+            )
+        })
+        .map(|(i, _)| i)
+        .collect();
+
+    // Tally from entries that are not being retried; they are already "done".
     let mut cached = 0usize;
     let mut fetched = 0usize;
-    for (i, ce) in result.entries.iter_mut().enumerate() {
-        let retry_doi = match &ce.outcome {
-            EntryOutcome::Unresolved {
-                doi,
-                network_error: true,
-            } => Some(doi.clone()),
-            _ => None,
-        };
-        if let Some(doi) = retry_doi {
-            ce.outcome = resolve_doi_outcome(&doi, &ce.entry.raw_text, client, cache).await;
+    for (i, ce) in result.entries.iter().enumerate() {
+        if retry.contains(&i) {
+            continue;
         }
         match &ce.outcome {
             EntryOutcome::Resolved {
@@ -83,60 +129,32 @@ pub async fn recheck_failures(
             } => fetched += 1,
             _ => {}
         }
-        progress(Progress {
-            done: i + 1,
-            total,
-            cached,
-            fetched,
-        });
     }
-    result
-}
+    let mut done = total - retry.len();
+    progress(Progress {
+        done,
+        total,
+        cached,
+        fetched,
+    });
 
-/// Run the checks over already-extracted document text.
-pub async fn run(
-    filename: String,
-    fingerprint: String,
-    run_at: String,
-    text: &str,
-    client: &CrossrefClient,
-    cache: &(impl DoiCache + Sync),
-    mut progress: impl FnMut(Progress),
-) -> CheckResult {
-    let bib = crate::biblio::detect(text);
-    let detected = bib.detected;
-    let raw_entries = bib.entries;
+    let jobs: Vec<(usize, String, String)> = retry
+        .iter()
+        .map(|&i| {
+            let ce = &result.entries[i];
+            let doi = match &ce.outcome {
+                EntryOutcome::Unresolved { doi, .. } => doi.clone(),
+                _ => String::new(),
+            };
+            (i, doi, ce.entry.raw_text.clone())
+        })
+        .collect();
 
-    let total = raw_entries.len();
-    let mut checked = Vec::with_capacity(total);
-    let mut cached = 0usize;
-    let mut fetched = 0usize;
-    for (i, entry) in raw_entries.into_iter().enumerate() {
-        let outcome = match &entry.doi {
-            Some(doi) => resolve_doi_outcome(doi, &entry.raw_text, client, cache).await,
-            None => {
-                let suggested = match client.search(&entry.raw_text).await {
-                    Ok(Some(hit)) if !hit.doi.is_empty() => {
-                        let cov = hit
-                            .metadata
-                            .title
-                            .as_deref()
-                            .map(|t| token_coverage(&entry.raw_text, t))
-                            .unwrap_or(0.0);
-                        if cov >= SUGGEST_THRESHOLD {
-                            Some(SuggestedDoi {
-                                doi: hit.doi,
-                                title_match: (cov * 100.0).round() as u8,
-                            })
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                };
-                EntryOutcome::NoDoi { suggested }
-            }
-        };
+    let mut tasks = stream::iter(jobs.into_iter().map(|(i, doi, raw_text)| async move {
+        (i, resolve_doi_outcome(&doi, &raw_text, client, cache).await)
+    }))
+    .buffer_unordered(concurrency.max(1));
+    while let Some((i, outcome)) = tasks.next().await {
         match &outcome {
             EntryOutcome::Resolved {
                 from_cache: true, ..
@@ -146,14 +164,89 @@ pub async fn run(
             } => fetched += 1,
             _ => {}
         }
-        checked.push(CheckedEntry { entry, outcome });
+        done += 1;
         progress(Progress {
-            done: i + 1,
+            done,
             total,
             cached,
             fetched,
         });
+        result.entries[i].outcome = outcome;
     }
+    result
+}
+
+/// Run the checks over already-extracted document text.
+#[allow(clippy::too_many_arguments)]
+pub async fn run(
+    filename: String,
+    fingerprint: String,
+    run_at: String,
+    text: &str,
+    client: &CrossrefClient,
+    cache: &(impl DoiCache + Sync),
+    concurrency: usize,
+    mut progress: impl FnMut(Progress),
+) -> CheckResult {
+    let bib = crate::biblio::detect(text);
+    let detected = bib.detected;
+    let entries = bib.entries;
+    let total = entries.len();
+
+    // Partition entries so each unique DOI is fetched once: first occurrence of
+    // a DOI (and all no-DOI entries) in pass 1; later repeats in pass 2, served
+    // from the cache the first occurrence populates.
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut first_pass: Vec<usize> = Vec::new();
+    let mut dup_pass: Vec<usize> = Vec::new();
+    for (i, e) in entries.iter().enumerate() {
+        match &e.doi {
+            Some(doi) if !seen.insert(doi.clone()) => dup_pass.push(i),
+            _ => first_pass.push(i),
+        }
+    }
+
+    let mut outcomes: Vec<Option<EntryOutcome>> = (0..total).map(|_| None).collect();
+    let mut done = 0usize;
+    let mut cached = 0usize;
+    let mut fetched = 0usize;
+    let limit = concurrency.max(1);
+
+    for indices in [first_pass, dup_pass] {
+        let mut tasks = stream::iter(indices.into_iter().map(|i| {
+            let entry = entries[i].clone();
+            async move { (i, outcome_for_entry(&entry, client, cache).await) }
+        }))
+        .buffer_unordered(limit);
+        while let Some((i, outcome)) = tasks.next().await {
+            match &outcome {
+                EntryOutcome::Resolved {
+                    from_cache: true, ..
+                } => cached += 1,
+                EntryOutcome::Resolved {
+                    from_cache: false, ..
+                } => fetched += 1,
+                _ => {}
+            }
+            done += 1;
+            progress(Progress {
+                done,
+                total,
+                cached,
+                fetched,
+            });
+            outcomes[i] = Some(outcome);
+        }
+    }
+
+    let checked: Vec<CheckedEntry> = entries
+        .into_iter()
+        .enumerate()
+        .map(|(i, entry)| CheckedEntry {
+            entry,
+            outcome: outcomes[i].take().expect("every entry produced an outcome"),
+        })
+        .collect();
 
     CheckResult {
         filename,
@@ -200,6 +293,7 @@ mod tests {
             text,
             &client,
             &cache,
+            5,
             |p| updates.push(p.done),
         )
         .await;
@@ -238,6 +332,7 @@ mod tests {
             text,
             &client,
             &cache,
+            5,
             |_| {},
         )
         .await;
@@ -280,6 +375,7 @@ mod tests {
             text,
             &client,
             &cache,
+            5,
             |_| {},
         )
         .await;
@@ -311,6 +407,7 @@ mod tests {
             text,
             &client,
             &cache,
+            5,
             |_| {},
         )
         .await;
@@ -340,6 +437,7 @@ mod tests {
             text,
             &client,
             &cache,
+            5,
             |_| {},
         )
         .await;
@@ -364,6 +462,7 @@ mod tests {
             text,
             &client,
             &cache,
+            5,
             |_| {},
         )
         .await;
@@ -419,7 +518,7 @@ mod tests {
             ],
         };
 
-        let updated = recheck_failures(result, &client, &cache, |_| {}).await;
+        let updated = recheck_failures(result, &client, &cache, 5, |_| {}).await;
         // The transient failure is now resolved.
         assert!(matches!(
             updated.entries[0].outcome,
@@ -430,5 +529,42 @@ mod tests {
             updated.entries[1].outcome,
             EntryOutcome::Resolved { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn duplicate_doi_is_fetched_once() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"/works/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "message": { "title": ["A Study of Widgets"], "DOI": "10.1000/dup" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = CrossrefClient::with_base("", server.uri());
+        let cache = MemoryCache::default();
+        let text = "References\n\
+[1] Smith J (2020). A Study of Widgets. 10.1000/dup\n\
+[2] Smith J (2020). A Study of Widgets, reprinted. 10.1000/dup";
+        let result = run(
+            "a.pdf".into(),
+            "fp".into(),
+            "now".into(),
+            text,
+            &client,
+            &cache,
+            5,
+            |_| {},
+        )
+        .await;
+        assert_eq!(result.entries.len(), 2);
+        assert!(
+            result
+                .entries
+                .iter()
+                .all(|e| matches!(e.outcome, EntryOutcome::Resolved { .. }))
+        );
+        // `.expect(1)` on the mock asserts a single Crossref call when `server` drops.
     }
 }

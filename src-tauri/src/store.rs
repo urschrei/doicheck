@@ -1,7 +1,7 @@
 //! SQLite persistence for documents, checks, entries, discrepancies, settings.
 
 use crate::model::{CheckResult, EntryOutcome};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -138,6 +138,21 @@ impl Store {
             params![key, value],
         )?;
         Ok(())
+    }
+
+    /// Number of concurrent Crossref requests. Defaults to 5 if absent or
+    /// invalid; clamped to 1..=20.
+    pub fn concurrency(&self) -> usize {
+        self.get_setting("concurrency")
+            .ok()
+            .flatten()
+            .and_then(|s| s.parse::<usize>().ok())
+            .map(|n| n.clamp(1, 20))
+            .unwrap_or(5)
+    }
+
+    pub fn set_concurrency(&self, value: usize) -> Result<(), StoreError> {
+        self.set_setting("concurrency", &value.to_string())
     }
 
     /// The cached Crossref JSON for a DOI, if present.
@@ -473,6 +488,21 @@ mod tests {
             store.get_setting("crossref_email").unwrap().as_deref(),
             Some("me@example.com")
         );
+    }
+
+    #[test]
+    fn concurrency_defaults_to_5_and_round_trips() {
+        let store = Store::open_in_memory().unwrap();
+        // Default when absent.
+        assert_eq!(store.concurrency(), 5);
+        // Stored value is returned.
+        store.set_concurrency(8).unwrap();
+        assert_eq!(store.concurrency(), 8);
+        // Values are clamped.
+        store.set_concurrency(0).unwrap();
+        assert_eq!(store.concurrency(), 1);
+        store.set_concurrency(25).unwrap();
+        assert_eq!(store.concurrency(), 20);
     }
 
     #[test]

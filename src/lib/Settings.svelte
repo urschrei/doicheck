@@ -1,15 +1,17 @@
 <script>
   import { onMount } from "svelte";
-  import { getEmail, setEmail, getReportsDir, setReportsDir } from "$lib/api.js";
+  import { getEmail, setEmail, getReportsDir, setReportsDir, getConcurrency, setConcurrency } from "$lib/api.js";
   import { open } from "@tauri-apps/plugin-dialog";
 
   let { onclose } = $props();
   let email = $state("");
   let reportsDir = $state("");
+  let concurrency = $state(5);
 
   onMount(async () => {
     email = await getEmail();
     reportsDir = (await getReportsDir()) ?? "";
+    concurrency = await getConcurrency();
   });
 
   async function pickDir() {
@@ -20,6 +22,7 @@
   async function saveAndClose() {
     await setEmail(email);
     await setReportsDir(reportsDir);
+    await setConcurrency(concurrency);
     onclose?.();
   }
 </script>
@@ -38,6 +41,10 @@
     </span>
   </label>
   <p class="hint">Save dialogs will default to this folder.</p>
+  <label>Parallel Crossref lookups
+    <input bind:value={concurrency} type="number" min="1" max="20" />
+  </label>
+  <p class="hint">Number of concurrent Crossref requests (1–20).</p>
   <div class="actions">
     <button onclick={() => onclose?.()}>Cancel</button>
     <button class="primary" onclick={saveAndClose}>Save</button>

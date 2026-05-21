@@ -6,6 +6,8 @@ export const getEmail = () => invoke("get_email");
 export const setEmail = (email) => invoke("set_email", { email });
 export const getReportsDir = () => invoke("get_reports_dir");
 export const setReportsDir = (dir) => invoke("set_reports_dir", { dir });
+export const getConcurrency = () => invoke("get_concurrency");
+export const setConcurrency = (value) => invoke("set_concurrency", { value });
 export const openDocument = (path) => invoke("open_document", { path });
 export const latestCheck = (fingerprint) => invoke("latest_check", { fingerprint });
 export const checkDocument = (path) => invoke("check_document", { path });

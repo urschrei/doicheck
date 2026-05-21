@@ -75,12 +75,14 @@ pub async fn check_document(
         return Err("no extractable text (image-only PDF?)".to_string());
     }
 
-    let email = {
+    let (email, concurrency) = {
         let store = state.store.lock().map_err(|e| e.to_string())?;
-        store
+        let email = store
             .get_setting("crossref_email")
             .map_err(map_err)?
-            .unwrap_or_else(|| DEFAULT_EMAIL.to_string())
+            .unwrap_or_else(|| DEFAULT_EMAIL.to_string());
+        let concurrency = store.concurrency();
+        (email, concurrency)
     };
     let client = CrossrefClient::new(&email);
     let run_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -96,6 +98,7 @@ pub async fn check_document(
         &text,
         &client,
         &cache,
+        concurrency,
         move |p: Progress| {
             let _ = app_for_progress.emit("progress", p);
         },
@@ -133,7 +136,7 @@ pub async fn recheck_failures(
     state: State<'_, AppState>,
     fingerprint: String,
 ) -> Result<crate::model::CheckResult, String> {
-    let (result, kind, email) = {
+    let (result, kind, email, concurrency) = {
         let store = state.store.lock().map_err(|e| e.to_string())?;
         let result = store
             .latest_result(&fingerprint)
@@ -147,7 +150,8 @@ pub async fn recheck_failures(
             .get_setting("crossref_email")
             .map_err(map_err)?
             .unwrap_or_else(|| DEFAULT_EMAIL.to_string());
-        (result, kind, email)
+        let concurrency = store.concurrency();
+        (result, kind, email, concurrency)
     };
 
     let client = CrossrefClient::new(&email);
@@ -158,6 +162,7 @@ pub async fn recheck_failures(
         &crate::cache::StoreCache {
             store: &state.store,
         },
+        concurrency,
         move |p: crate::model::Progress| {
             let _ = app_for_progress.emit("progress", p);
         },
@@ -254,4 +259,17 @@ pub fn get_reports_dir(state: State<'_, AppState>) -> Result<Option<String>, Str
 pub fn set_reports_dir(state: State<'_, AppState>, dir: String) -> Result<(), String> {
     let store = state.store.lock().map_err(|e| e.to_string())?;
     store.set_setting("reports_dir", &dir).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn get_concurrency(state: State<'_, AppState>) -> Result<u32, String> {
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    Ok(store.concurrency() as u32)
+}
+
+#[tauri::command]
+pub fn set_concurrency(state: State<'_, AppState>, value: u32) -> Result<(), String> {
+    let clamped = value.clamp(1, 20) as usize;
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    store.set_concurrency(clamped).map_err(map_err)
 }
