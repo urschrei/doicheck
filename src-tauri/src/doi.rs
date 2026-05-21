@@ -55,10 +55,8 @@ pub fn extract_with_context(text: &str) -> Vec<(String, String)> {
         }
         let lower_bound = m.start().saturating_sub(WINDOW).max(prev_end);
         let start = snap_char_boundary(text, lower_bound);
-        let context = text[start..m.end()]
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
+        let window = trim_to_last_entry_start(&text[start..m.end()]);
+        let context = window.split_whitespace().collect::<Vec<_>>().join(" ");
         out.push((doi.clone(), context));
         seen.push(doi);
         prev_end = m.end();
@@ -71,6 +69,23 @@ fn snap_char_boundary(s: &str, mut i: usize) -> usize {
         i -= 1;
     }
     i
+}
+
+/// Trim a context window to start at the last line that begins a reference entry,
+/// so the window holds only the reference that owns the DOI. If no entry start is
+/// found, return the whole window unchanged.
+fn trim_to_last_entry_start(window: &str) -> &str {
+    let mut best = 0usize;
+    let mut found = false;
+    let mut offset = 0usize;
+    for line in window.split_inclusive('\n') {
+        if crate::biblio::is_entry_start(line) {
+            best = offset;
+            found = true;
+        }
+        offset += line.len();
+    }
+    if found { &window[best..] } else { window }
 }
 
 #[cfg(test)]
@@ -116,5 +131,17 @@ mod tests {
         // The second window starts after the first DOI, so it must not
         // contain the first entry's title.
         assert!(!v[1].1.contains("Widgets"));
+    }
+
+    // A window must not include a prior reference that happened to lack a DOI.
+    #[test]
+    fn context_excludes_prior_doiless_reference() {
+        let text = "Atkinson, R. & Easthope, H. (2008) 'Creative Class'. https://www.jstor.org/stable/23289786\n\
+Black, J. (2026) 'Towards Net-Zero'. https://doi.org/10.7916/qbtt-xa42\n";
+        let v = extract_with_context(text);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].0, "10.7916/qbtt-xa42");
+        assert!(v[0].1.contains("Black"));
+        assert!(!v[0].1.contains("Atkinson"));
     }
 }
