@@ -5,6 +5,10 @@ All notable changes to this project are documented here. The format is based on
 [Semantic Versioning](https://semver.org/). Release-only version bumps are
 omitted.
 
+## [Unreleased]
+
+- Remove the unused VS Code workspace folder (`.vscode/`) from the repository.
+
 ## [0.3.1] - 2026-05-21
 
 - Strip trailing punctuation (e.g. the full stop after a DOI) from linkified
