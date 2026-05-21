@@ -40,12 +40,12 @@
 <div class="card" style="border-left-color:{sev.colour}">
   <div class="head">
     <span class="badge" style="color:{sev.colour}">&#9679;</span>
-    <span class="ord">[{entry.entry.ordinal}]</span>
+    <span class="ord">[Reference: {entry.entry.ordinal}]</span>
     <span class="label" style="color:{sev.colour}">{sev.label}</span>
   </div>
 
   {#if entry.entry.raw_text}
-    <p class="srclabel">From your document</p>
+    <p class="srclabel">Text in document:</p>
     <blockquote class="ref">{#each parts(entry.entry.raw_text) as p}{#if p.url}<a class="link" href={p.url} onclick={(e) => { e.preventDefault(); open(p.url); }}>{p.url}</a>{:else}{p.t}{/if}{/each}</blockquote>
   {/if}
 
