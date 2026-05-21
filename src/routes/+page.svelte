@@ -181,6 +181,7 @@
     --sel-fg: #ffffff;
     --backdrop: rgba(0, 0, 0, 0.2);
     --danger: #b00020;
+    --integrity: #d70015;
     --sev-fail: #ff5f57;
     --sev-warn: #febc2e;
     --sev-info: #3b82f6;
@@ -205,6 +206,7 @@
       --sel-fg: #ffffff;
       --backdrop: rgba(0, 0, 0, 0.5);
       --danger: #ff6b6b;
+      --integrity: #ff453a;
       --sev-fail: #ff6b66;
       --sev-warn: #f5c542;
       --sev-info: #6aa8ff;

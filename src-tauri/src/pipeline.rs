@@ -173,6 +173,9 @@ pub async fn recheck_failures(
         });
         result.entries[i].outcome = outcome;
     }
+    for ce in &mut result.entries {
+        ce.llm_source = crate::integrity::llm_source(&ce.entry.raw_text);
+    }
     result
 }
 
@@ -242,9 +245,13 @@ pub async fn run(
     let checked: Vec<CheckedEntry> = entries
         .into_iter()
         .enumerate()
-        .map(|(i, entry)| CheckedEntry {
-            entry,
-            outcome: outcomes[i].take().expect("every entry produced an outcome"),
+        .map(|(i, entry)| {
+            let llm_source = crate::integrity::llm_source(&entry.raw_text);
+            CheckedEntry {
+                entry,
+                outcome: outcomes[i].take().expect("every entry produced an outcome"),
+                llm_source,
+            }
         })
         .collect();
 
@@ -502,6 +509,7 @@ mod tests {
                         doi: "10.1000/fail".into(),
                         network_error: true,
                     },
+                    llm_source: None,
                 },
                 CheckedEntry {
                     entry: ReferenceEntry {
@@ -514,6 +522,7 @@ mod tests {
                         discrepancies: vec![],
                         from_cache: false,
                     },
+                    llm_source: None,
                 },
             ],
         };
@@ -559,10 +568,47 @@ mod tests {
         )
         .await;
         assert_eq!(result.entries.len(), 2);
-        assert!(result
-            .entries
-            .iter()
-            .all(|e| matches!(e.outcome, EntryOutcome::Resolved { .. })));
+        assert!(
+            result
+                .entries
+                .iter()
+                .all(|e| matches!(e.outcome, EntryOutcome::Resolved { .. }))
+        );
         // `.expect(1)` on the mock asserts a single Crossref call when `server` drops.
+    }
+
+    #[tokio::test]
+    async fn llm_source_flag_set_for_chatgpt_utm_parameter() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(query_param("rows", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "message": { "items": [] }
+            })))
+            .mount(&server)
+            .await;
+        let client = CrossrefClient::with_base("", server.uri());
+        let cache = MemoryCache::default();
+
+        // A reference whose raw text contains a ChatGPT tracking parameter.
+        let text = "References\nSmith J (2024). A Study. \
+            https://example.com/x.pdf?utm_source=chatgpt.com";
+        let result = run(
+            "a.pdf".into(),
+            "fp".into(),
+            "now".into(),
+            text,
+            &client,
+            &cache,
+            5,
+            |_| {},
+        )
+        .await;
+
+        assert_eq!(result.entries.len(), 1);
+        assert_eq!(
+            result.entries[0].llm_source.as_deref(),
+            Some("utm_source=chatgpt.com")
+        );
     }
 }

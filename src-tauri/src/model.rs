@@ -54,6 +54,8 @@ pub enum EntryOutcome {
 pub struct CheckedEntry {
     pub entry: ReferenceEntry,
     pub outcome: EntryOutcome,
+    #[serde(default)]
+    pub llm_source: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -67,6 +69,7 @@ pub struct Counts {
     pub dismissed: usize,
     pub missing_doi_flagged: usize,
     pub network_failed: usize,
+    pub llm_flagged: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,6 +111,9 @@ impl CheckResult {
             ..Counts::default()
         };
         for e in &self.entries {
+            if e.llm_source.is_some() {
+                c.llm_flagged += 1;
+            }
             match &e.outcome {
                 EntryOutcome::Resolved {
                     discrepancies,
@@ -166,6 +172,7 @@ mod tests {
                         discrepancies: vec![],
                         from_cache: true,
                     },
+                    llm_source: None,
                 },
                 CheckedEntry {
                     entry: ReferenceEntry {
@@ -183,6 +190,7 @@ mod tests {
                         }],
                         from_cache: false,
                     },
+                    llm_source: None,
                 },
                 CheckedEntry {
                     entry: ReferenceEntry {
@@ -194,6 +202,7 @@ mod tests {
                         doi: "10.1/c".into(),
                         network_error: false,
                     },
+                    llm_source: None,
                 },
                 CheckedEntry {
                     entry: ReferenceEntry {
@@ -207,6 +216,7 @@ mod tests {
                             title_match: 90,
                         }),
                     },
+                    llm_source: None,
                 },
             ],
         };
@@ -238,6 +248,7 @@ mod tests {
                         doi: "10.1/a".into(),
                         network_error: true,
                     },
+                    llm_source: None,
                 },
                 CheckedEntry {
                     entry: ReferenceEntry {
@@ -249,6 +260,7 @@ mod tests {
                         doi: "10.1/b".into(),
                         network_error: false,
                     },
+                    llm_source: None,
                 },
             ],
         };

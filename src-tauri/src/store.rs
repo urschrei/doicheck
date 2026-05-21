@@ -1,7 +1,7 @@
 //! SQLite persistence for documents, checks, entries, discrepancies, settings.
 
 use crate::model::{CheckResult, EntryOutcome};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -460,6 +460,7 @@ mod tests {
                     }],
                     from_cache: false,
                 },
+                llm_source: None,
             }],
         }
     }
@@ -547,6 +548,7 @@ mod tests {
                 doi: "10.1/a".into(),
                 network_error: true,
             },
+            llm_source: None,
         }];
         store.save_check(&r, "pdf", "T").unwrap();
         let docs = store.list_documents().unwrap();

@@ -1,7 +1,7 @@
 <script>
   import { save, open } from "@tauri-apps/plugin-dialog";
   import { exportReport, getReportsDir, setReportsDir } from "$lib/api.js";
-  import { classify, SEVERITY, cacheTally } from "$lib/result.js";
+  import { classify, SEVERITY, cacheTally, llmSource } from "$lib/result.js";
   import EntryCard from "$lib/EntryCard.svelte";
 
   let { result = null, busy = false, progress = null, currentPath = "", onopen, onrecheck, onrecheckfailures, ondismiss, onundismiss } = $props();
@@ -29,6 +29,7 @@
   const cleanOnes = $derived(classified.filter((x) => x.kind === "clean"));
   const totalIssues = $derived(classified.filter((x) => x.kind !== "clean").length);
   const tally = $derived(cacheTally(result));
+  const llmFlagged = $derived((result?.entries ?? []).filter((e) => llmSource(e)).length);
 
   function matchesFilter(kind, f) {
     if (f === "unresolved") return kind === "unresolved" || kind === "network";
@@ -96,6 +97,9 @@
   {#if tally.cached + tally.fetched > 0}
     <p class="tally">Resolved: {tally.cached} from cache, {tally.fetched} from Crossref</p>
   {/if}
+  {#if llmFlagged > 0}
+    <p class="integrity-note">{llmFlagged} possible AI source{llmFlagged === 1 ? "" : "s"} flagged — see highlighted entries below.</p>
+  {/if}
   {#if counts.network > 0}
     <p class="warn">{counts.network} entr{counts.network === 1 ? "y" : "ies"} couldn't be checked (network or capacity). Use "Re-check failures" when you're back online; everything already resolved is cached.</p>
   {/if}
@@ -144,6 +148,7 @@
   .empty { color: var(--text-muted); border: 2px dashed var(--border); border-radius: 8px; padding: 32px; text-align: center; }
   .note { color: var(--text-muted); }
   .tally { color: var(--text-muted); font-size: 12px; margin: 0 0 8px; }
+  .integrity-note { color: var(--integrity); font-size: 12px; font-weight: 600; margin: 0 0 8px; }
   .warn { color: var(--sev-warn); background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; }
   .progress { color: var(--text-muted); }
 </style>

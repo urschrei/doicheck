@@ -9,6 +9,7 @@ pub mod doi;
 pub mod export;
 pub mod extract;
 pub mod ingest;
+pub mod integrity;
 pub mod model;
 pub mod pipeline;
 pub mod report;

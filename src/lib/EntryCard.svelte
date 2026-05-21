@@ -1,6 +1,6 @@
 <script>
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { classify, SEVERITY, entryDoi, activeDiscrepancies, dismissedDiscrepancies, suggestion } from "$lib/result.js";
+  import { classify, SEVERITY, entryDoi, activeDiscrepancies, dismissedDiscrepancies, suggestion, llmSource } from "$lib/result.js";
 
   let { entry, ondismiss, onundismiss } = $props();
 
@@ -10,6 +10,7 @@
   const active = $derived(activeDiscrepancies(entry));
   const dismissed = $derived(dismissedDiscrepancies(entry));
   const sugg = $derived(suggestion(entry));
+  const llm = $derived(llmSource(entry));
 
   const URL_RE = /(https?:\/\/[^\s)]+)/g;
   function parts(text) {
@@ -37,7 +38,10 @@
   }
 </script>
 
-<div class="card" style="border-left-color:{sev.colour}">
+<div class="card" class:flagged={llm} style="border-left-color:{sev.colour}">
+  {#if llm}
+    <div class="integrity">Possible AI source — reference URL contains "{llm}"</div>
+  {/if}
   <div class="head">
     <span class="badge" style="color:{sev.colour}">&#9679;</span>
     <span class="ord">[Reference: {entry.entry.ordinal}]</span>
@@ -84,6 +88,8 @@
 
 <style>
   .card { background: var(--bg-elevated); border: 1px solid var(--border-soft); border-left-width: 3px; border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; }
+  .card.flagged { border: 2px solid var(--integrity); }
+  .integrity { background: var(--integrity); color: #fff; font-weight: 600; font-size: 12px; padding: 3px 8px; border-radius: 4px; margin-bottom: 6px; }
   .head { display: flex; align-items: center; gap: 6px; }
   .ord { font-weight: 600; }
   .label { font-size: 12px; }

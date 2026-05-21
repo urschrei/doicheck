@@ -47,6 +47,10 @@ export function suggestion(entry) {
   return entry.outcome.NoDoi ? entry.outcome.NoDoi.suggested : null;
 }
 
+export function llmSource(entry) {
+  return entry.llm_source || null;
+}
+
 // How many resolved entries came from the local cache vs a fresh Crossref fetch.
 export function cacheTally(result) {
   let cached = 0;

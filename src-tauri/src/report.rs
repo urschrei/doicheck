@@ -36,6 +36,9 @@ pub fn render(result: &CheckResult) -> String {
         "  No-DOI entries flagged:      {}",
         c.missing_doi_flagged
     );
+    if c.llm_flagged > 0 {
+        let _ = writeln!(s, "  Possible AI sources flagged: {}", c.llm_flagged);
+    }
     let _ = writeln!(s);
 
     let _ = writeln!(s, "Discrepancies");
@@ -53,6 +56,13 @@ pub fn render(result: &CheckResult) -> String {
                         e.entry.ordinal, doi, d.field, d.reference_value, d.crossref_value
                     );
                 }
+                if let Some(marker) = &e.llm_source {
+                    let _ = writeln!(
+                        s,
+                        "    ** POSSIBLE AI SOURCE - reference URL contains \"{}\" **",
+                        marker
+                    );
+                }
             }
             EntryOutcome::Unresolved { doi, network_error } => {
                 any_disc = true;
@@ -62,8 +72,24 @@ pub fn render(result: &CheckResult) -> String {
                     "not found on Crossref"
                 };
                 let _ = writeln!(s, "  [{}] {}  {}", e.entry.ordinal, doi, reason);
+                if let Some(marker) = &e.llm_source {
+                    let _ = writeln!(
+                        s,
+                        "    ** POSSIBLE AI SOURCE - reference URL contains \"{}\" **",
+                        marker
+                    );
+                }
             }
-            _ => {}
+            _ => {
+                if let Some(marker) = &e.llm_source {
+                    any_disc = true;
+                    let _ = writeln!(
+                        s,
+                        "  [{}]   ** POSSIBLE AI SOURCE - reference URL contains \"{}\" **",
+                        e.entry.ordinal, marker
+                    );
+                }
+            }
         }
     }
     if !any_disc {
@@ -122,6 +148,7 @@ mod tests {
                         }],
                         from_cache: false,
                     },
+                    llm_source: None,
                 },
                 CheckedEntry {
                     entry: ReferenceEntry {
@@ -135,6 +162,7 @@ mod tests {
                             title_match: 82,
                         }),
                     },
+                    llm_source: None,
                 },
             ],
         };

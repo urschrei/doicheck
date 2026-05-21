@@ -7,9 +7,9 @@ pub fn to_json(result: &CheckResult) -> String {
     serde_json::to_string_pretty(result).unwrap_or_default()
 }
 
-/// One row per entry: ordinal, doi, status, unmatched fields, suggested doi.
+/// One row per entry: ordinal, doi, status, unmatched fields, suggested doi, llm_source.
 pub fn to_csv(result: &CheckResult) -> String {
-    let mut out = String::from("ordinal,doi,status,unmatched_fields,suggested_doi\n");
+    let mut out = String::from("ordinal,doi,status,unmatched_fields,suggested_doi,llm_source\n");
     for e in &result.entries {
         let (status, unmatched, suggested) = match &e.outcome {
             EntryOutcome::Resolved { discrepancies, .. } => {
@@ -47,13 +47,15 @@ pub fn to_csv(result: &CheckResult) -> String {
                     .unwrap_or_default(),
             ),
         };
+        let llm = e.llm_source.as_deref().unwrap_or("");
         out.push_str(&format!(
-            "{},{},{},{},{}\n",
+            "{},{},{},{},{},{}\n",
             e.entry.ordinal,
             csv_field(e.entry.doi.as_deref().unwrap_or("")),
             status,
             csv_field(&unmatched),
             csv_field(&suggested),
+            csv_field(llm),
         ));
     }
     out
@@ -91,6 +93,7 @@ mod tests {
                         discrepancies: vec![],
                         from_cache: false,
                     },
+                    llm_source: None,
                 },
                 CheckedEntry {
                     entry: ReferenceEntry {
@@ -108,6 +111,7 @@ mod tests {
                         }],
                         from_cache: false,
                     },
+                    llm_source: None,
                 },
                 CheckedEntry {
                     entry: ReferenceEntry {
@@ -121,6 +125,7 @@ mod tests {
                             title_match: 90,
                         }),
                     },
+                    llm_source: None,
                 },
             ],
         }
@@ -132,11 +137,11 @@ mod tests {
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(
             lines[0],
-            "ordinal,doi,status,unmatched_fields,suggested_doi"
+            "ordinal,doi,status,unmatched_fields,suggested_doi,llm_source"
         );
-        assert_eq!(lines[1], "1,10.1000/a,clean,,");
-        assert_eq!(lines[2], "2,10.1000/b,mismatch,year,");
-        assert_eq!(lines[3], "3,,no_doi,,10.1000/c");
+        assert_eq!(lines[1], "1,10.1000/a,clean,,,");
+        assert_eq!(lines[2], "2,10.1000/b,mismatch,year,,");
+        assert_eq!(lines[3], "3,,no_doi,,10.1000/c,");
     }
 
     #[test]
