@@ -27,6 +27,9 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
+    "macOS": {
+      "signingIdentity": "-"
+    },
     "resources": [
       "pdfium/*"
     ],

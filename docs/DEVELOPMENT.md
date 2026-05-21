@@ -192,6 +192,44 @@ Keep modules focused; if a file is growing beyond one responsibility, split it.
   `Cargo.toml`/`package.json`), commit, `git tag vX.Y.Z`, push the tag, then publish
   the draft release.
 
+## macOS code signing and notarisation
+
+The macOS build is **ad-hoc signed** (`bundle.macOS.signingIdentity` is `"-"` in
+`tauri.conf.json`) and **not notarised**, because the project currently has no Apple
+Developer account. Consequences:
+
+- A downloaded build is quarantined by Gatekeeper and treated as from an
+  "unidentified developer". To run it, clear the quarantine flag and open it:
+  `xattr -dr com.apple.quarantine "/Applications/DOI Checker.app"` (then open, or
+  use System Settings -> Privacy & Security -> "Open Anyway"). On macOS Sequoia the
+  old Control-click -> Open shortcut no longer bypasses Gatekeeper.
+- The ad-hoc signature makes the app a valid, runnable bundle (avoiding the
+  "is damaged" state) but does not remove the quarantine step for end users.
+- Windows builds are likewise unsigned, so SmartScreen shows a warning until the
+  user chooses "Run anyway".
+
+### Future: Developer ID signing + notarisation
+
+A paid Apple Developer Program membership lets the release be signed with a
+Developer ID and notarised, so it opens by double-click with no workaround. No code
+changes are needed beyond configuration; `tauri-action` performs signing and
+notarisation automatically when these are present:
+
+1. Create a **Developer ID Application** certificate and export it as a `.p12`.
+2. Add repository secrets:
+   - `APPLE_CERTIFICATE` - base64 of the `.p12` file.
+   - `APPLE_CERTIFICATE_PASSWORD` - the `.p12` export password.
+   - `APPLE_SIGNING_IDENTITY` - e.g. `Developer ID Application: Name (TEAMID)`.
+   - `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password) and `APPLE_TEAM_ID`
+     - for `notarytool` submission.
+3. Forward those secrets through the `tauri-apps/tauri-action` step's `env` in
+   `release.yml`, and replace `bundle.macOS.signingIdentity` `"-"` with the
+   Developer ID identity (or supply it via `APPLE_SIGNING_IDENTITY`). Tauri then
+   signs with the Developer ID and submits to `notarytool`.
+
+Refer to the Tauri macOS code-signing documentation for the current secret names
+before wiring this in.
+
 ## Conventions
 
 - UK spelling; no emoji in code, comments, or docs; factual, non-hyperbolic prose.

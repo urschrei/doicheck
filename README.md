@@ -26,7 +26,27 @@ Built with Tauri (Rust backend) and Svelte. Targets macOS and Windows.
   plain text, JSON, or CSV.
 - Checks GitHub releases for a newer version on launch and offers to install it.
 
-## Requirements
+## Installing
+
+Download the installer for your platform from the
+[latest release](https://github.com/urschrei/doicheck/releases/latest).
+
+The app is not signed with a paid developer certificate yet, so the operating
+system warns on first launch:
+
+- **macOS:** move `DOI Checker.app` to `/Applications`, then clear the Gatekeeper
+  quarantine flag once and open it:
+
+  ```sh
+  xattr -dr com.apple.quarantine "/Applications/DOI Checker.app"
+  ```
+
+  On macOS Sequoia the Control-click -> Open shortcut no longer bypasses
+  Gatekeeper; the command above (or System Settings -> Privacy & Security ->
+  "Open Anyway") is the way in.
+- **Windows:** SmartScreen may warn — choose "More info" -> "Run anyway".
+
+## Requirements (to build from source)
 
 - [Rust](https://rustup.rs) (stable) and [Node.js](https://nodejs.org) (22+).
 - macOS or Windows. Crossref lookups need a network connection.
