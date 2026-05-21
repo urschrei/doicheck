@@ -72,9 +72,9 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path src-tauri/pdfium | Out-Null
-          Invoke-WebRequest -Uri https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-win-x64.zip -OutFile $env:TEMP\pdfium.zip
-          Expand-Archive -Path $env:TEMP\pdfium.zip -DestinationPath $env:TEMP\pdfium -Force
-          Copy-Item $env:TEMP\pdfium\bin\pdfium.dll src-tauri\pdfium\pdfium.dll
+          Invoke-WebRequest -Uri https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-win-x64.tgz -OutFile $env:TEMP\pdfium.tgz
+          tar -xzf $env:TEMP\pdfium.tgz -C $env:TEMP bin/pdfium.dll
+          Copy-Item $env:TEMP\bin\pdfium.dll src-tauri\pdfium\pdfium.dll
 
       - uses: tauri-apps/tauri-action@v0
         env:
