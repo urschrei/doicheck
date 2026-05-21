@@ -1,5 +1,5 @@
 <script>
-  let { documents = [], onselect, onsettings, ondelete, onhelp } = $props();
+  let { documents = [], selected, onselect, onsettings, ondelete, onhelp } = $props();
 
   function meta(status) {
     if (status === "incomplete") return { glyph: "↻", colour: "var(--sev-incomplete)", title: "Interrupted - re-check failures" };
@@ -19,7 +19,7 @@
   </div>
   <ul>
     {#each documents as d (d.fingerprint)}
-      <li class="row">
+      <li class="row" class:selected={d.fingerprint === selected}>
         <button class="rowmain" onclick={() => onselect?.(d.fingerprint)}>
           <span class="status" style="color:{meta(d.status).colour}" title={meta(d.status).title}>{meta(d.status).glyph}</span>
           <span class="name">{d.filename}</span>
@@ -40,6 +40,8 @@
   ul { list-style: none; margin: 0; padding: 0; }
   .row { display: flex; align-items: stretch; }
   .row:hover { background: var(--bg-hover); }
+  .row.selected, .row.selected:hover { background: var(--accent-soft-bg); }
+  .row.selected .name { color: var(--accent); }
   .rowmain { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 4px; padding: 6px 10px; flex: 1; min-width: 0; border: 0; background: transparent; text-align: left; cursor: pointer; font: inherit; color: var(--text); }
   .name { font-weight: 600; overflow-wrap: anywhere; }
   .when { grid-column: 2; color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }

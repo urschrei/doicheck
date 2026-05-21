@@ -31,6 +31,7 @@
     currentPath = path;
     try {
       result = await api.checkDocument(path);
+      selectedFingerprint = result.fingerprint;
       await refresh();
     } catch (e) {
       error = String(e);
@@ -65,6 +66,7 @@
       const stored = await api.openDocument(path);
       if (stored) {
         result = stored;
+        selectedFingerprint = stored.fingerprint;
       } else {
         await runCheck(path);
       }
@@ -134,7 +136,7 @@
 </script>
 
 <main class="layout">
-  <Sidebar {documents} onselect={selectDocument} onsettings={() => (showSettings = true)} onhelp={() => { helpTab = "guide"; showHelp = true; }} ondelete={deleteDocument} />
+  <Sidebar {documents} selected={selectedFingerprint} onselect={selectDocument} onsettings={() => (showSettings = true)} onhelp={() => { helpTab = "guide"; showHelp = true; }} ondelete={deleteDocument} />
   <section class="pane">
     {#if error}<p class="error">{error}</p>{/if}
     <ReportPane

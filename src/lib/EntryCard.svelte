@@ -45,7 +45,8 @@
   </div>
 
   {#if entry.entry.raw_text}
-    <p class="ref">{#each parts(entry.entry.raw_text) as p}{#if p.url}<a class="link" href={p.url} onclick={(e) => { e.preventDefault(); open(p.url); }}>{p.url}</a>{:else}{p.t}{/if}{/each}</p>
+    <p class="srclabel">From your document</p>
+    <blockquote class="ref">{#each parts(entry.entry.raw_text) as p}{#if p.url}<a class="link" href={p.url} onclick={(e) => { e.preventDefault(); open(p.url); }}>{p.url}</a>{:else}{p.t}{/if}{/each}</blockquote>
   {/if}
 
   {#if active.length}
@@ -86,7 +87,8 @@
   .head { display: flex; align-items: center; gap: 6px; }
   .ord { font-weight: 600; }
   .label { font-size: 12px; }
-  .ref { color: var(--text); margin: 4px 0; }
+  .srclabel { text-transform: uppercase; font-size: 10px; letter-spacing: 0.03em; color: var(--text-muted); margin: 6px 0 2px; }
+  .ref { color: var(--text); margin: 0 0 6px; padding: 5px 9px; background: var(--bg-sidebar); border-left: 3px solid var(--border); border-radius: 0 4px 4px 0; }
   .fields { margin: 4px 0; padding-left: 18px; }
   .fields li { margin: 2px 0; }
   .dismissedlist { color: var(--text-muted); }
