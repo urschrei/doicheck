@@ -58,6 +58,24 @@ jobs:
         with:
           workspaces: src-tauri
 
+      - name: Fetch PDFium (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p src-tauri/pdfium
+          curl -fsSL -o /tmp/pdfium.tgz \
+            https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-mac-univ.tgz
+          tar -xzf /tmp/pdfium.tgz -C /tmp lib/libpdfium.dylib
+          cp /tmp/lib/libpdfium.dylib src-tauri/pdfium/libpdfium.dylib
+
+      - name: Fetch PDFium (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path src-tauri/pdfium | Out-Null
+          Invoke-WebRequest -Uri https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-win-x64.zip -OutFile $env:TEMP\pdfium.zip
+          Expand-Archive -Path $env:TEMP\pdfium.zip -DestinationPath $env:TEMP\pdfium -Force
+          Copy-Item $env:TEMP\pdfium\bin\pdfium.dll src-tauri\pdfium\pdfium.dll
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
