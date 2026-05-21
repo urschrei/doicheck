@@ -1,6 +1,6 @@
 {
   "name": "doicheck",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Check the DOIs in a document's bibliography against Crossref",
   "type": "module",
   "scripts": {
