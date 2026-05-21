@@ -38,7 +38,7 @@
   }
 </script>
 
-<div class="card" class:flagged={llm} style="border-left-color:{sev.colour}">
+<div class="card" class:flagged={llm} style={llm ? "" : `border-left-color:${sev.colour}`}>
   {#if llm}
     <div class="integrity">Possible AI source — reference URL contains "{llm}"</div>
   {/if}
