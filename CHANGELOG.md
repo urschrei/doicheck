@@ -8,6 +8,7 @@ omitted.
 ## [Unreleased]
 
 - Remove the unused VS Code workspace folder (`.vscode/`) from the repository.
+- Speed up the Windows release build by using `rd /s /q` for the disk-cleanup step.
 
 ## [0.3.1] - 2026-05-21
 

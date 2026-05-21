@@ -37,10 +37,14 @@ jobs:
             "$env:AGENT_TOOLSDIRECTORY\CodeQL"
           )
           foreach ($t in $targets) {
-            if ($t -and (Test-Path $t)) { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $t }
+            # rd /s /q is markedly faster than Remove-Item -Recurse over the huge
+            # Android SDK tree; cleanup is best-effort, so failures are ignored.
+            if ($t -and (Test-Path $t)) { cmd /c "rd /s /q `"$t`"" }
           }
           $after = (Get-PSDrive C).Free / 1GB
           Write-Host ("C: free: {0:N1} GB -> {1:N1} GB" -f $before, $after)
+          # A locked file blocking a deletion must not fail the release.
+          exit 0
 
       - uses: actions/setup-node@v6
         with:
