@@ -11,12 +11,12 @@ export function classify(entry) {
 }
 
 export const SEVERITY = {
-  unresolved: { label: "DOI not found on Crossref", colour: "#b00020", order: 0 },
-  network: { label: "Check failed (network)", colour: "#b00020", order: 1 },
-  mismatch: { label: "Metadata mismatch", colour: "#9a6700", order: 2 },
-  no_doi_suggested: { label: "No DOI — suggestion available", colour: "#0a52c2", order: 3 },
-  no_doi: { label: "No DOI found", colour: "#0a52c2", order: 4 },
-  clean: { label: "Matched", colour: "#1a7f37", order: 5 },
+  unresolved: { label: "DOI not found on Crossref", colour: "var(--sev-fail)", order: 0 },
+  network: { label: "Check failed (network)", colour: "var(--sev-fail)", order: 1 },
+  mismatch: { label: "Metadata mismatch", colour: "var(--sev-warn)", order: 2 },
+  no_doi_suggested: { label: "No DOI — suggestion available", colour: "var(--sev-info)", order: 3 },
+  no_doi: { label: "No DOI found", colour: "var(--sev-info)", order: 4 },
+  clean: { label: "Matched", colour: "var(--sev-ok)", order: 5 },
 };
 
 // The DOI of an entry regardless of outcome (for links/copy).

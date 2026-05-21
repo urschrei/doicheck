@@ -82,17 +82,17 @@
 </div>
 
 <style>
-  .card { border: 1px solid #eee; border-left-width: 3px; border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; }
+  .card { background: var(--bg-elevated); border: 1px solid var(--border-soft); border-left-width: 3px; border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; }
   .head { display: flex; align-items: center; gap: 6px; }
   .ord { font-weight: 600; }
   .label { font-size: 12px; }
-  .ref { color: #444; margin: 4px 0; }
+  .ref { color: var(--text); margin: 4px 0; }
   .fields { margin: 4px 0; padding-left: 18px; }
   .fields li { margin: 2px 0; }
-  .dismissedlist { color: #999; }
-  .linkbtn { border: 0; background: transparent; color: #0a52c2; text-decoration: underline; cursor: pointer; font: inherit; font-size: 11px; padding: 0 0 0 4px; }
-  .dismissedlist .linkbtn { color: #777; }
-.actions { display: flex; gap: 6px; margin-top: 4px; align-items: center; }
+  .dismissedlist { color: var(--text-muted); }
+  .linkbtn { border: 0; background: transparent; color: var(--accent); text-decoration: underline; cursor: pointer; font: inherit; font-size: 11px; padding: 0 0 0 4px; }
+  .dismissedlist .linkbtn { color: var(--text-muted); }
+  .actions { display: flex; gap: 6px; margin-top: 4px; align-items: center; }
   button { font: inherit; font-size: 12px; padding: 2px 8px; }
-  .link { color: #0a52c2; text-decoration: underline; cursor: pointer; }
+  .link { color: var(--accent); text-decoration: underline; cursor: pointer; }
 </style>

@@ -45,14 +45,14 @@
 </div>
 
 <style>
-  .backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.2); }
-  .sheet { position: fixed; top: 16%; left: 50%; transform: translateX(-50%); background: #fff; border-radius: 10px; padding: 20px; width: 420px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); }
-  label { display: block; font-size: 12px; color: #555; margin-top: 8px; }
-  input { width: 100%; box-sizing: border-box; margin-top: 4px; padding: 6px; font: inherit; }
+  .backdrop { position: fixed; inset: 0; background: var(--backdrop); }
+  .sheet { position: fixed; top: 16%; left: 50%; transform: translateX(-50%); background: var(--bg-elevated); color: var(--text); border-radius: 10px; padding: 20px; width: 420px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); border: 1px solid var(--border); }
+  label { display: block; font-size: 12px; color: var(--text-muted); margin-top: 8px; }
+  input { width: 100%; box-sizing: border-box; margin-top: 4px; padding: 6px; font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; }
   .row { display: flex; gap: 6px; }
   .row input { flex: 1; }
-  .hint { color: #888; font-size: 11px; }
+  .hint { color: var(--text-muted); font-size: 11px; }
   .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
-  .primary { background: #0a84ff; color: #fff; border: 0; border-radius: 6px; padding: 5px 14px; }
-  button { font: inherit; }
+  .primary { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 5px 14px; }
+  button { font: inherit; color: var(--text); }
 </style>

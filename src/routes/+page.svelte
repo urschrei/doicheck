@@ -158,8 +158,57 @@
 </main>
 
 <style>
-  :global(body) { margin: 0; }
+  :global(:root) {
+    color-scheme: light;
+    --bg: #ffffff;
+    --bg-sidebar: #f7f7f7;
+    --bg-elevated: #ffffff;
+    --bg-hover: #ececec;
+    --border: #e3e3e3;
+    --border-soft: #eeeeee;
+    --text: #1a1a1a;
+    --text-muted: #888888;
+    --accent: #0a52c2;
+    --accent-soft-bg: #eef2ff;
+    --backdrop: rgba(0, 0, 0, 0.2);
+    --danger: #b00020;
+    --sev-fail: #ff5f57;
+    --sev-warn: #febc2e;
+    --sev-info: #3b82f6;
+    --sev-ok: #28c840;
+    --sev-incomplete: #ff9f0a;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :global(:root) {
+      color-scheme: dark;
+      --bg: #1e1e1e;
+      --bg-sidebar: #252526;
+      --bg-elevated: #2a2a2b;
+      --bg-hover: #333335;
+      --border: #3a3a3c;
+      --border-soft: #333335;
+      --text: #e8e8e8;
+      --text-muted: #9a9a9a;
+      --accent: #5a9bff;
+      --accent-soft-bg: #1f2c47;
+      --backdrop: rgba(0, 0, 0, 0.5);
+      --danger: #ff6b6b;
+      --sev-fail: #ff6b66;
+      --sev-warn: #f5c542;
+      --sev-info: #6aa8ff;
+      --sev-ok: #3ad44f;
+      --sev-incomplete: #ffac3a;
+    }
+  }
+
+  :global(body) {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+  }
+
   .layout { display: grid; grid-template-columns: 240px 1fr; height: 100vh; font: 13px -apple-system, system-ui, sans-serif; }
   .pane { padding: 16px; overflow: auto; }
-  .error { color: #b00020; }
+  .error { color: var(--danger); }
 </style>

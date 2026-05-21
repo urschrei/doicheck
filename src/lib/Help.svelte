@@ -95,12 +95,12 @@
 </div>
 
 <style>
-  .backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.2); }
-  .sheet { position: fixed; top: 10%; left: 50%; transform: translateX(-50%); background: #fff; border-radius: 10px; width: 520px; max-width: 90vw; max-height: 80vh; display: flex; flex-direction: column; box-shadow: 0 10px 40px rgba(0,0,0,0.2); overflow: hidden; }
-  .tabs { display: flex; align-items: center; gap: 4px; border-bottom: 1px solid #eee; padding: 6px 8px; }
-  .tabs button { font: inherit; font-size: 13px; padding: 4px 10px; border: 0; background: transparent; border-radius: 6px; cursor: pointer; color: #555; }
-  .tabs button.active { background: #eef2ff; color: #0a52c2; }
-  .tabs .close { margin-left: auto; color: #888; }
+  .backdrop { position: fixed; inset: 0; background: var(--backdrop); }
+  .sheet { position: fixed; top: 10%; left: 50%; transform: translateX(-50%); background: var(--bg-elevated); color: var(--text); border-radius: 10px; width: 520px; max-width: 90vw; max-height: 80vh; display: flex; flex-direction: column; box-shadow: 0 10px 40px rgba(0,0,0,0.2); overflow: hidden; border: 1px solid var(--border); }
+  .tabs { display: flex; align-items: center; gap: 4px; border-bottom: 1px solid var(--border-soft); padding: 6px 8px; }
+  .tabs button { font: inherit; font-size: 13px; padding: 4px 10px; border: 0; background: transparent; border-radius: 6px; cursor: pointer; color: var(--text-muted); }
+  .tabs button.active { background: var(--accent-soft-bg); color: var(--accent); }
+  .tabs .close { margin-left: auto; color: var(--text-muted); }
   .body { padding: 14px 18px; overflow: auto; }
   h3 { margin: 14px 0 6px; font-size: 13px; }
   h3:first-child { margin-top: 0; }
@@ -108,7 +108,7 @@
   li { margin: 3px 0; }
   code { font-family: ui-monospace, Menlo, monospace; }
   .field { margin: 6px 0; }
-  .field span { display: inline-block; width: 90px; color: #888; }
-  .meta { color: #777; font-size: 12px; margin: 10px 0 0; }
-  .link { border: 0; background: transparent; color: #0a52c2; text-decoration: underline; cursor: pointer; font: inherit; padding: 0; }
+  .field span { display: inline-block; width: 90px; color: var(--text-muted); }
+  .meta { color: var(--text-muted); font-size: 12px; margin: 10px 0 0; }
+  .link { border: 0; background: transparent; color: var(--accent); text-decoration: underline; cursor: pointer; font: inherit; padding: 0; }
 </style>

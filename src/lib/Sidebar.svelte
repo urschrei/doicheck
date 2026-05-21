@@ -2,10 +2,10 @@
   let { documents = [], onselect, onsettings, ondelete, onhelp } = $props();
 
   function meta(status) {
-    if (status === "incomplete") return { glyph: "↻", colour: "#ff9f0a", title: "Interrupted - re-check failures" };
-    if (status === "has-issues") return { glyph: "●", colour: "#febc2e", title: "Has issues" };
-    if (status === "failed") return { glyph: "●", colour: "#ff5f57", title: "Check failed" };
-    return { glyph: "●", colour: "#28c840", title: "Clean" };
+    if (status === "incomplete") return { glyph: "↻", colour: "var(--sev-incomplete)", title: "Interrupted - re-check failures" };
+    if (status === "has-issues") return { glyph: "●", colour: "var(--sev-warn)", title: "Has issues" };
+    if (status === "failed") return { glyph: "●", colour: "var(--sev-fail)", title: "Check failed" };
+    return { glyph: "●", colour: "var(--sev-ok)", title: "Clean" };
   }
 </script>
 
@@ -32,17 +32,17 @@
 </aside>
 
 <style>
-  .sidebar { background: #f7f7f7; border-right: 1px solid #e3e3e3; overflow: auto; }
+  .sidebar { background: var(--bg-sidebar); border-right: 1px solid var(--border); overflow: auto; }
   .head { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; }
-  .title { text-transform: uppercase; font-size: 10px; color: #888; }
-  .gear { border: 0; background: transparent; cursor: pointer; font-size: 13px; }
+  .title { text-transform: uppercase; font-size: 10px; color: var(--text-muted); }
+  .gear { border: 0; background: transparent; cursor: pointer; font-size: 13px; color: var(--text); }
   .actions { display: flex; gap: 4px; }
   ul { list-style: none; margin: 0; padding: 0; }
   .row { display: flex; align-items: stretch; }
-  .row:hover { background: #ececec; }
-  .rowmain { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 4px; padding: 6px 10px; flex: 1; min-width: 0; border: 0; background: transparent; text-align: left; cursor: pointer; font: inherit; }
+  .row:hover { background: var(--bg-hover); }
+  .rowmain { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 4px; padding: 6px 10px; flex: 1; min-width: 0; border: 0; background: transparent; text-align: left; cursor: pointer; font: inherit; color: var(--text); }
   .name { font-weight: 600; overflow-wrap: anywhere; }
-  .when { grid-column: 2; color: #888; font-size: 11px; overflow-wrap: anywhere; }
-  .del { flex: none; align-self: flex-start; margin-top: 6px; border: 0; background: transparent; color: #aaa; cursor: pointer; padding: 0 10px; font-size: 12px; }
-  .del:hover { color: #b00020; }
+  .when { grid-column: 2; color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }
+  .del { flex: none; align-self: flex-start; margin-top: 6px; border: 0; background: transparent; color: var(--text-muted); cursor: pointer; padding: 0 10px; font-size: 12px; }
+  .del:hover { color: var(--danger); }
 </style>
