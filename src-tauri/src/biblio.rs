@@ -9,15 +9,22 @@ static HEADING_RE: LazyLock<Regex> = LazyLock::new(|| {
     // effectively the whole line. Trailing dotted leaders/page numbers (a
     // table-of-contents entry) prevent a match.
     Regex::new(
-        r"(?im)^\s*(?:\d+\.?\s+|[ivxlcdm]+\.?\s+)?(references|reference list|bibliography|works cited|literature cited)\s*[:.]?\s*$",
+        r"(?im)^\s*(?:\d+\.?\s+|[ivxlcdm]+\.?\s+)?(references|reference list|bibliography|works cited|literature cited|resources|sources)\s*[:.]?\s*$",
     )
     .unwrap()
 });
 
 // Headings that mark the end of the bibliography (the start of a later section),
-// so trailing matter such as an appendix is not treated as references.
-static END_HEADING_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?im)^\s*(?:appendix|appendices)\b").unwrap());
+// so trailing matter is not treated as references. The appendix matcher stays
+// loose (a title may follow on the same line); the remaining terminators must be
+// the whole line, so a citation that merely begins with the word (e.g.
+// "Declaration of Helsinki (2013) ...") is not mistaken for a heading.
+static END_HEADING_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?im)^\s*(?:appendix|appendices)\b|^\s*(?:declarations?|statement\s+of\s+\w+(?:\s+\w+)*|acknowledge?ments?|about\s+the\s+authors?|author\s+biograph\w+|biograph(?:y|ies)|biographical\s+notes?)\s*[:.]?\s*$",
+    )
+    .unwrap()
+});
 
 // A numbered marker at the start of an entry, e.g. "[12]" or "12." or "12)".
 static NUMBER_MARKER_RE: LazyLock<Regex> =
@@ -51,7 +58,7 @@ pub fn section_after_heading(text: &str) -> Option<&str> {
 /// A line begins a new entry if it carries a numbered marker, or it looks like
 /// an author-date opening: starts with an uppercase letter and has a
 /// parenthesised year near the start.
-fn is_entry_start(line: &str) -> bool {
+pub(crate) fn is_entry_start(line: &str) -> bool {
     if NUMBER_MARKER_RE.is_match(line) {
         return true;
     }
@@ -128,10 +135,61 @@ fn continues_url(buf: &str, next: &str) -> bool {
         .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "/?#&=%._~-+".contains(c))
 }
 
+/// Split a line into a (lowercased prefix, page-number) candidate for a running
+/// header. The prefix may be empty (a bare page number). Returns `None` when the
+/// line is not header-shaped: the trailing token must be a 1-3 digit integer (a
+/// page number, not a year), and the prefix must be short (a header, not a
+/// reference line).
+fn running_head_parts(line: &str) -> Option<(String, &str)> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let (prefix, num) = match trimmed.rsplit_once(char::is_whitespace) {
+        Some((p, n)) => (p.trim(), n),
+        None => ("", trimmed),
+    };
+    if num.len() > 3 || num.is_empty() || !num.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    if prefix.chars().count() > 30 {
+        return None;
+    }
+    Some((prefix.to_lowercase(), num))
+}
+
+/// Remove running page-headers and bare page numbers. A header-shaped line is
+/// dropped only when its prefix recurs on at least three lines with differing
+/// numbers, which marks a repeating header/footer rather than reference content.
+fn strip_running_heads(text: &str) -> String {
+    use std::collections::{HashMap, HashSet};
+    let mut groups: HashMap<String, HashSet<&str>> = HashMap::new();
+    for line in text.lines() {
+        if let Some((prefix, num)) = running_head_parts(line) {
+            groups.entry(prefix).or_default().insert(num);
+        }
+    }
+    let strip: HashSet<String> = groups
+        .into_iter()
+        .filter(|(_, nums)| nums.len() >= 3)
+        .map(|(prefix, _)| prefix)
+        .collect();
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        let drop = running_head_parts(line).is_some_and(|(prefix, _)| strip.contains(&prefix));
+        if !drop {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
 /// Detect and segment the bibliography from full document text. If no heading is
 /// found, fall back to DOI-anchored windows so comparison still has real text.
 pub fn detect(text: &str) -> Bibliography {
-    if let Some(section) = section_after_heading(text) {
+    let cleaned = strip_running_heads(text);
+    if let Some(section) = section_after_heading(&cleaned) {
         let entries = split_entries(section)
             .into_iter()
             .enumerate()
@@ -146,7 +204,7 @@ pub fn detect(text: &str) -> Bibliography {
             entries,
         }
     } else {
-        let entries = crate::doi::extract_with_context(text)
+        let entries = crate::doi::extract_with_context(&cleaned)
             .into_iter()
             .enumerate()
             .map(|(i, (doi, raw_text))| ReferenceEntry {
@@ -326,5 +384,112 @@ Appendix A - Interview questions\n\
         assert_eq!(bib.entries.len(), 1);
         assert!(bib.entries[0].raw_text.contains("Smith"));
         assert!(!bib.entries.iter().any(|e| e.raw_text.contains("your role")));
+    }
+
+    // A DECLARATION section after the last reference must not be absorbed into it.
+    #[test]
+    fn section_stops_at_declaration() {
+        let text = "References\n\
+Yi, H. and Lim, J. (2020) 'Health equity'. Journal of Travel Medicine. https://doi.org/10.1093/jtm/taaa159\n\
+DECLARATION\n\
+AI tools were used to proofread for grammar.\n\
+Name: A Student\n";
+        let bib = detect(text);
+        assert!(bib.detected);
+        let last = bib.entries.last().unwrap();
+        assert!(last.raw_text.contains("Yi"));
+        assert!(!last.raw_text.contains("DECLARATION"));
+        assert!(!last.raw_text.to_lowercase().contains("proofread"));
+        assert_eq!(last.doi.as_deref(), Some("10.1093/jtm/taaa159"));
+    }
+
+    // A reference whose title begins "Declaration of ..." is NOT a heading and
+    // must not truncate the list.
+    #[test]
+    fn reference_titled_declaration_not_truncated() {
+        let text = "References\n\
+Declaration of Helsinki (2013) 'Ethical principles'. https://doi.org/10.1001/jama.2013.281053\n\
+Zull, A. (2020) 'Last ref'. https://doi.org/10.1000/last\n";
+        let bib = detect(text);
+        assert!(bib.detected);
+        assert_eq!(bib.entries.len(), 2);
+        assert!(
+            bib.entries
+                .iter()
+                .any(|e| e.doi.as_deref() == Some("10.1000/last"))
+        );
+    }
+
+    // "Resources"/"Sources" are heading synonyms used by some student papers.
+    #[test]
+    fn detects_resources_and_sources_headings() {
+        let r = detect("Body.\n\nResources\nSmith, J. (2020) A study. https://doi.org/10.1000/x\n");
+        assert!(r.detected);
+        let s = detect("Body.\n\nSources\nSmith, J. (2020) A study. https://doi.org/10.1000/x\n");
+        assert!(s.detected);
+    }
+
+    // Under a recognised heading, adjacent author-date references split apart
+    // even when the first carries no DOI.
+    #[test]
+    fn resources_heading_splits_adjacent_references() {
+        let text = "Resources\n\
+Atkinson, R. & Easthope, H. (2008) 'Creative Class'. https://www.jstor.org/stable/23289786\n\
+Black, J. (2026) 'Towards Net-Zero'. https://doi.org/10.7916/qbtt-xa42\n";
+        let bib = detect(text);
+        assert!(bib.detected);
+        assert_eq!(bib.entries.len(), 2);
+        assert!(bib.entries[0].raw_text.contains("Atkinson"));
+        assert!(bib.entries[1].raw_text.contains("Black"));
+        assert_eq!(bib.entries[1].doi.as_deref(), Some("10.7916/qbtt-xa42"));
+    }
+
+    // Repeating headers/page numbers are removed; one-offs and 4-digit numbers
+    // are kept.
+    #[test]
+    fn strip_running_heads_keeps_one_offs() {
+        let text = "Anderson 1\nAnderson 2\nAnderson 3\nSmart Cities Plan 2016\nReport 7\n1\n2\n3\nBody text here.\n";
+        let cleaned = strip_running_heads(text);
+        assert!(!cleaned.contains("Anderson"));
+        assert!(cleaned.contains("Smart Cities Plan 2016"));
+        assert!(cleaned.contains("Report 7"));
+        assert!(cleaned.contains("Body text here."));
+        assert!(!cleaned.lines().any(|l| l.trim() == "1"));
+    }
+
+    // A recurring running header between references is not glued onto an entry.
+    #[test]
+    fn running_header_not_glued_to_reference() {
+        let text = "References\n\
+Albino, V. (2015) 'Smart Cities'. https://doi.org/10.1000/albino\n\
+Anderson 9\n\
+Atkinson, R. (2008) 'Creative Class'. https://www.jstor.org/stable/23289786\n\
+Anderson 10\n\
+Black, J. (2026) 'Net-Zero'. https://doi.org/10.1000/black\n\
+Anderson 11\n";
+        let bib = detect(text);
+        assert!(bib.detected);
+        assert!(bib.entries.iter().all(|e| !e.raw_text.contains("Anderson")));
+    }
+
+    // A bare page number after a DOI must not be glued onto and corrupt the DOI.
+    #[test]
+    fn page_number_does_not_corrupt_doi() {
+        let text = "References\n\
+Aaa, B. (2019) 'First'. https://doi.org/10.1000/aaa\n\
+12\n\
+Yi, H. (2020) 'Health equity'. Journal, 28(2), taaa159. https://doi.org/10.1093/jtm/taaa159\n\
+13\n\
+Zzz, C. (2021) 'Third'. https://doi.org/10.1000/zzz\n\
+14\n";
+        let bib = detect(text);
+        assert!(bib.detected);
+        let yi = bib
+            .entries
+            .iter()
+            .find(|e| e.raw_text.contains("Yi"))
+            .unwrap();
+        assert_eq!(yi.doi.as_deref(), Some("10.1093/jtm/taaa159"));
+        assert!(!yi.raw_text.contains("taaa15914"));
     }
 }

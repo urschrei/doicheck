@@ -5,8 +5,14 @@ All notable changes to this project are documented here. The format is based on
 [Semantic Versioning](https://semver.org/). Release-only version bumps are
 omitted.
 
-## [Unreleased]
+## [0.3.2] - 2026-05-21
 
+- Improve bibliography boundary detection: end the reference list before trailing
+  matter (declaration, statement, acknowledgements, author biography) so it is
+  not absorbed into the last reference (which previously also corrupted that
+  reference's DOI); recognise "Resources"/"Sources" headings; strip repeating
+  running heads and page numbers before segmentation; and trim the no-heading
+  fallback so adjacent references are not conflated.
 - Remove the unused VS Code workspace folder (`.vscode/`) from the repository.
 - Speed up the Windows release build by using `rd /s /q` for the disk-cleanup step.
 
