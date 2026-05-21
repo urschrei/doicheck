@@ -40,8 +40,9 @@
   ul { list-style: none; margin: 0; padding: 0; }
   .row { display: flex; align-items: stretch; }
   .row:hover { background: var(--bg-hover); }
-  .row.selected, .row.selected:hover { background: var(--accent-soft-bg); }
-  .row.selected .name { color: var(--accent); }
+  .row.selected, .row.selected:hover { background: var(--sel-bg); }
+  .row.selected .name, .row.selected .when { color: var(--sel-fg); }
+  .row.selected .del { color: var(--sel-fg); }
   .rowmain { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 4px; padding: 6px 10px; flex: 1; min-width: 0; border: 0; background: transparent; text-align: left; cursor: pointer; font: inherit; color: var(--text); }
   .name { font-weight: 600; overflow-wrap: anywhere; }
   .when { grid-column: 2; color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }

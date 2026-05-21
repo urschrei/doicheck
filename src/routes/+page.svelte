@@ -172,6 +172,8 @@
     --text-muted: #888888;
     --accent: #0a52c2;
     --accent-soft-bg: #eef2ff;
+    --sel-bg: #0a52c2;
+    --sel-fg: #ffffff;
     --backdrop: rgba(0, 0, 0, 0.2);
     --danger: #b00020;
     --sev-fail: #ff5f57;
@@ -194,6 +196,8 @@
       --text-muted: #9a9a9a;
       --accent: #5a9bff;
       --accent-soft-bg: #1f2c47;
+      --sel-bg: #2d5fa6;
+      --sel-fg: #ffffff;
       --backdrop: rgba(0, 0, 0, 0.5);
       --danger: #ff6b6b;
       --sev-fail: #ff6b66;
