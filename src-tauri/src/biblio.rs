@@ -65,8 +65,14 @@ pub fn split_entries(section: &str) -> Vec<String> {
             }
             current = Some(line.to_string());
         } else if let Some(buf) = current.as_mut() {
-            buf.push(' ');
-            buf.push_str(line);
+            if continues_url(buf, line) {
+                let kept = buf.trim_end().len();
+                buf.truncate(kept);
+                buf.push_str(line.trim_start());
+            } else {
+                buf.push(' ');
+                buf.push_str(line);
+            }
         }
     }
     if let Some(buf) = current {
@@ -89,6 +95,26 @@ pub fn split_entries(section: &str) -> Vec<String> {
 
 fn collapse_ws(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Whether a wrapped continuation line continues a URL from the previous line,
+/// so it should be glued on without an intervening space. PDF line wraps split
+/// long URLs across lines; joining with a space would break the link.
+fn continues_url(buf: &str, next: &str) -> bool {
+    if !buf
+        .split_whitespace()
+        .next_back()
+        .is_some_and(|t| t.contains("://"))
+    {
+        return false;
+    }
+    // Glue only when the continuation begins like a URL fragment (a lowercase
+    // letter, digit, or path/query character) rather than a capitalised word or
+    // a bracketed access note such as "(Accessed ...)".
+    next.trim_start()
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "/?#&=%._~-+".contains(c))
 }
 
 /// Detect and segment the bibliography from full document text. If no heading is
@@ -221,5 +247,39 @@ Tan, Y. (2026) Tigers and flies. Available at: https://example.com/x \n";
             .expect("the Sun reference should be a single entry carrying its DOI");
         assert!(sun.raw_text.contains("Sun"));
         assert!(sun.raw_text.contains("2025"));
+    }
+
+    // A URL split across a line wrap must be rejoined without a space, so the
+    // link stays intact, while a following access note stays separated.
+    #[test]
+    fn rejoins_url_split_across_lines() {
+        let section = "References\n\
+Ackerman, D. (2022) Is my lawn bad for the climate? Available at: \n\
+  https://open.spotify.com/episode/abc123?si=yvWZyJ1dQiaRP\n\
+  yEefMMNfQ (Accessed September 8, 2022). \n";
+        let entries = split_entries(section_after_heading(section).unwrap());
+        assert_eq!(entries.len(), 1);
+        assert!(
+            entries[0].contains("si=yvWZyJ1dQiaRPyEefMMNfQ"),
+            "URL should be rejoined without a space: {}",
+            entries[0]
+        );
+        assert!(entries[0].contains("yEefMMNfQ (Accessed"));
+    }
+
+    // A URL that wraps right after a path slash (with a trailing space on the
+    // first line) must also be rejoined without a space.
+    #[test]
+    fn rejoins_url_split_after_slash() {
+        let section = "References\n\
+Bessner, D. (2026) Bonus. Available at: https://open.spotify.com/ \n\
+  episode/0V9RrZ?si=HTck0Bu (Accessed Jan 25, 2026). \n";
+        let entries = split_entries(section_after_heading(section).unwrap());
+        assert_eq!(entries.len(), 1);
+        assert!(
+            entries[0].contains("https://open.spotify.com/episode/0V9RrZ?si=HTck0Bu"),
+            "URL should be rejoined without a space: {}",
+            entries[0]
+        );
     }
 }
