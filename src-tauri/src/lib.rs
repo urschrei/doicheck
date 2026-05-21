@@ -34,12 +34,13 @@ pub fn run() {
                 store: Mutex::new(store),
             });
 
-            use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+            use tauri::menu::{Menu, MenuItem, Submenu};
 
             let about = MenuItem::with_id(app, "about", "About DOI Checker", true, None::<&str>)?;
 
             #[cfg(target_os = "macos")]
             {
+                use tauri::menu::PredefinedMenuItem;
                 let app_menu = Submenu::with_items(
                     app,
                     "DOI Checker",
