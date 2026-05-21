@@ -34,6 +34,12 @@ pub fn run() {
                 store: Mutex::new(store),
             });
 
+            // Point PDF extraction at the bundled PDFium library in the app's
+            // resource directory.
+            if let Ok(resources) = app.path().resource_dir() {
+                extract::pdf::set_library_dir(resources.join("pdfium"));
+            }
+
             use tauri::menu::{Menu, MenuItem, Submenu};
 
             let about = MenuItem::with_id(app, "about", "About DOI Checker", true, None::<&str>)?;
