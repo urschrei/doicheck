@@ -84,10 +84,22 @@ One-time setup:
    - `TAURI_SIGNING_PRIVATE_KEY` — the contents of the private key file.
    - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — the key's password (empty if none).
 
-To cut a release: bump the version in `src-tauri/tauri.conf.json` (and the
-`Cargo.toml`/`package.json` versions), commit, then `git tag vX.Y.Z` and push the
-tag. Review and publish the resulting draft release. The auto-updater serves the
-most recently published release.
+To cut a release:
+
+1. Bump the version and commit. Three files carry it and should be kept in sync:
+   - `src-tauri/tauri.conf.json` (`version`) — the source of truth. It sets the
+     installer/bundle **filenames**, the in-app **About** version
+     (`getVersion()`), and the version written into the updater's `latest.json`.
+     (`Cargo.toml`'s version is only a fallback used when this key is absent.)
+   - `src-tauri/Cargo.toml` (`[package] version`).
+   - `package.json` (`version`) — npm metadata only; kept in sync for tidiness.
+
+   The git tag does **not** set the version: if `tauri.conf.json` is left
+   unchanged, the build keeps the old number and the updater will not treat the
+   release as newer than installed copies.
+2. `git push origin main`, then `git tag vX.Y.Z && git push origin vX.Y.Z`.
+3. Review and publish the resulting draft release. The auto-updater serves the
+   most recently published release.
 
 ## Auto-update
 
