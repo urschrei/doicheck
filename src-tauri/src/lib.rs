@@ -33,7 +33,72 @@ pub fn run() {
             app.manage(AppState {
                 store: Mutex::new(store),
             });
+
+            use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+
+            let about = MenuItem::with_id(app, "about", "About DOI Checker", true, None::<&str>)?;
+
+            #[cfg(target_os = "macos")]
+            {
+                let app_menu = Submenu::with_items(
+                    app,
+                    "DOI Checker",
+                    true,
+                    &[
+                        &about,
+                        &PredefinedMenuItem::separator(app)?,
+                        &PredefinedMenuItem::services(app, None)?,
+                        &PredefinedMenuItem::separator(app)?,
+                        &PredefinedMenuItem::hide(app, None)?,
+                        &PredefinedMenuItem::hide_others(app, None)?,
+                        &PredefinedMenuItem::show_all(app, None)?,
+                        &PredefinedMenuItem::separator(app)?,
+                        &PredefinedMenuItem::quit(app, None)?,
+                    ],
+                )?;
+                let edit_menu = Submenu::with_items(
+                    app,
+                    "Edit",
+                    true,
+                    &[
+                        &PredefinedMenuItem::undo(app, None)?,
+                        &PredefinedMenuItem::redo(app, None)?,
+                        &PredefinedMenuItem::separator(app)?,
+                        &PredefinedMenuItem::cut(app, None)?,
+                        &PredefinedMenuItem::copy(app, None)?,
+                        &PredefinedMenuItem::paste(app, None)?,
+                        &PredefinedMenuItem::select_all(app, None)?,
+                    ],
+                )?;
+                let window_menu = Submenu::with_items(
+                    app,
+                    "Window",
+                    true,
+                    &[
+                        &PredefinedMenuItem::minimize(app, None)?,
+                        &PredefinedMenuItem::maximize(app, None)?,
+                        &PredefinedMenuItem::separator(app)?,
+                        &PredefinedMenuItem::close_window(app, None)?,
+                    ],
+                )?;
+                let menu = Menu::with_items(app, &[&app_menu, &edit_menu, &window_menu])?;
+                app.set_menu(menu)?;
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                let help_menu = Submenu::with_items(app, "Help", true, &[&about])?;
+                let menu = Menu::with_items(app, &[&help_menu])?;
+                app.set_menu(menu)?;
+            }
+
             Ok(())
+        })
+        .on_menu_event(|app, event| {
+            if event.id().as_ref() == "about" {
+                use tauri::Emitter;
+                let _ = app.emit("open-about", ());
+            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_documents,

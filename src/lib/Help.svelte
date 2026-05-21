@@ -3,8 +3,8 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { getVersion } from "@tauri-apps/api/app";
 
-  let { onclose } = $props();
-  let tab = $state("guide");
+  let { onclose, initialTab = "guide" } = $props();
+  let tab = $state(initialTab);
   let version = $state("");
 
   onMount(async () => {

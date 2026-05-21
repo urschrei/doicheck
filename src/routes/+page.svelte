@@ -17,6 +17,7 @@
   let error = $state("");
   let showSettings = $state(false);
   let showHelp = $state(false);
+  let helpTab = $state("guide");
   let selectedFingerprint = $state("");
 
   async function refresh() {
@@ -111,6 +112,7 @@
     checkForUpdate();
     let unlistenProgress;
     let unlistenDrag;
+    let unlistenAbout;
     (async () => {
       unlistenProgress = await api.onProgress((p) => (progress = p));
       unlistenDrag = await getCurrentWebview().onDragDropEvent((event) => {
@@ -118,16 +120,21 @@
           openPath(event.payload.paths[0]);
         }
       });
+      unlistenAbout = await api.onOpenAbout(() => {
+        helpTab = "about";
+        showHelp = true;
+      });
     })();
     return () => {
       unlistenProgress?.();
       unlistenDrag?.();
+      unlistenAbout?.();
     };
   });
 </script>
 
 <main class="layout">
-  <Sidebar {documents} onselect={selectDocument} onsettings={() => (showSettings = true)} onhelp={() => (showHelp = true)} ondelete={deleteDocument} />
+  <Sidebar {documents} onselect={selectDocument} onsettings={() => (showSettings = true)} onhelp={() => { helpTab = "guide"; showHelp = true; }} ondelete={deleteDocument} />
   <section class="pane">
     {#if error}<p class="error">{error}</p>{/if}
     <ReportPane
@@ -146,7 +153,7 @@
     <Settings onclose={() => (showSettings = false)} />
   {/if}
   {#if showHelp}
-    <Help onclose={() => (showHelp = false)} />
+    <Help onclose={() => (showHelp = false)} initialTab={helpTab} />
   {/if}
 </main>
 
