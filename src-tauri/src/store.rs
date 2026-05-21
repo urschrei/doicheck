@@ -1,7 +1,7 @@
 //! SQLite persistence for documents, checks, entries, discrepancies, settings.
 
 use crate::model::{CheckResult, EntryOutcome};
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {

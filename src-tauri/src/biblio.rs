@@ -9,10 +9,15 @@ static HEADING_RE: LazyLock<Regex> = LazyLock::new(|| {
     // effectively the whole line. Trailing dotted leaders/page numbers (a
     // table-of-contents entry) prevent a match.
     Regex::new(
-        r"(?im)^\s*(?:\d+\.?\s+|[ivxlcdm]+\.?\s+)?(references|bibliography|works cited|literature cited)\s*$",
+        r"(?im)^\s*(?:\d+\.?\s+|[ivxlcdm]+\.?\s+)?(references|reference list|bibliography|works cited|literature cited)\s*[:.]?\s*$",
     )
     .unwrap()
 });
+
+// Headings that mark the end of the bibliography (the start of a later section),
+// so trailing matter such as an appendix is not treated as references.
+static END_HEADING_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?im)^\s*(?:appendix|appendices)\b").unwrap());
 
 // A numbered marker at the start of an entry, e.g. "[12]" or "12." or "12)".
 static NUMBER_MARKER_RE: LazyLock<Regex> =
@@ -34,7 +39,13 @@ pub struct Bibliography {
 /// text after it. Returns `None` if no heading is found.
 pub fn section_after_heading(text: &str) -> Option<&str> {
     let last = HEADING_RE.find_iter(text).last()?;
-    Some(&text[last.end()..])
+    let section = &text[last.end()..];
+    // Stop at a later top-level section (e.g. an appendix) so its content is not
+    // mistaken for references.
+    match END_HEADING_RE.find(section) {
+        Some(end) => Some(&section[..end.start()]),
+        None => Some(section),
+    }
 }
 
 /// A line begins a new entry if it carries a numbered marker, or it looks like
@@ -281,5 +292,39 @@ Bessner, D. (2026) Bonus. Available at: https://open.spotify.com/ \n\
             "URL should be rejoined without a space: {}",
             entries[0]
         );
+    }
+
+    // A heading with a trailing colon ("Bibliography:") must still be detected.
+    #[test]
+    fn detects_heading_with_trailing_colon() {
+        let text =
+            "Body text.\n\nBibliography:\nSmith, J. (2020) A study of things. Journal of Things.\n";
+        let bib = detect(text);
+        assert!(bib.detected);
+        assert_eq!(bib.entries.len(), 1);
+        assert!(bib.entries[0].raw_text.contains("Smith"));
+    }
+
+    // "Reference List" is a valid heading synonym.
+    #[test]
+    fn detects_reference_list_heading() {
+        let text = "Body.\n\nReference List\nSmith, J. (2020) A study. Journal.\n";
+        assert!(detect(text).detected);
+    }
+
+    // The references section must stop at a later appendix, not absorb its
+    // numbered questions as references.
+    #[test]
+    fn section_stops_at_appendix() {
+        let text = "Bibliography:\n\
+Smith, J. (2020) A study of things. Journal of Things.\n\
+Appendix A - Interview questions\n\
+1. What is your role?\n\
+2. What do you think?\n";
+        let bib = detect(text);
+        assert!(bib.detected);
+        assert_eq!(bib.entries.len(), 1);
+        assert!(bib.entries[0].raw_text.contains("Smith"));
+        assert!(!bib.entries.iter().any(|e| e.raw_text.contains("your role")));
     }
 }

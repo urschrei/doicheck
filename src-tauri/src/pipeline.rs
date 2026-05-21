@@ -568,12 +568,10 @@ mod tests {
         )
         .await;
         assert_eq!(result.entries.len(), 2);
-        assert!(
-            result
-                .entries
-                .iter()
-                .all(|e| matches!(e.outcome, EntryOutcome::Resolved { .. }))
-        );
+        assert!(result
+            .entries
+            .iter()
+            .all(|e| matches!(e.outcome, EntryOutcome::Resolved { .. })));
         // `.expect(1)` on the mock asserts a single Crossref call when `server` drops.
     }
 
