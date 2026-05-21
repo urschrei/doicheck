@@ -35,7 +35,7 @@
   .sidebar { background: var(--bg-sidebar); border-right: 1px solid var(--border); overflow: auto; }
   .head { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; }
   .title { text-transform: uppercase; font-size: 10px; color: var(--text-muted); }
-  .gear { border: 0; background: transparent; cursor: pointer; font-size: 13px; color: var(--text); }
+  .gear { border: 0; background: transparent; cursor: pointer; font-size: 16px; color: var(--text); }
   .actions { display: flex; gap: 4px; }
   ul { list-style: none; margin: 0; padding: 0; }
   .row { display: flex; align-items: stretch; }

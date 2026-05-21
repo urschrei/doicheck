@@ -115,6 +115,7 @@
     let unlistenProgress;
     let unlistenDrag;
     let unlistenAbout;
+    let unlistenSettings;
     (async () => {
       unlistenProgress = await api.onProgress((p) => (progress = p));
       unlistenDrag = await getCurrentWebview().onDragDropEvent((event) => {
@@ -126,11 +127,15 @@
         helpTab = "about";
         showHelp = true;
       });
+      unlistenSettings = await api.onOpenSettings(() => {
+        showSettings = true;
+      });
     })();
     return () => {
       unlistenProgress?.();
       unlistenDrag?.();
       unlistenAbout?.();
+      unlistenSettings?.();
     };
   });
 </script>

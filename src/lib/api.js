@@ -21,3 +21,4 @@ export const undismissDiscrepancy = (fingerprint, doi, field) =>
   invoke("undismiss_discrepancy", { fingerprint, doi, field });
 export const onProgress = (handler) => listen("progress", (e) => handler(e.payload));
 export const onOpenAbout = (handler) => listen("open-about", () => handler());
+export const onOpenSettings = (handler) => listen("open-settings", () => handler());

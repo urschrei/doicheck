@@ -43,6 +43,8 @@ pub fn run() {
             use tauri::menu::{Menu, MenuItem, Submenu};
 
             let about = MenuItem::with_id(app, "about", "About DOI Checker", true, None::<&str>)?;
+            let settings =
+                MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
 
             #[cfg(target_os = "macos")]
             {
@@ -53,6 +55,8 @@ pub fn run() {
                     true,
                     &[
                         &about,
+                        &PredefinedMenuItem::separator(app)?,
+                        &settings,
                         &PredefinedMenuItem::separator(app)?,
                         &PredefinedMenuItem::services(app, None)?,
                         &PredefinedMenuItem::separator(app)?,
@@ -94,7 +98,7 @@ pub fn run() {
 
             #[cfg(not(target_os = "macos"))]
             {
-                let help_menu = Submenu::with_items(app, "Help", true, &[&about])?;
+                let help_menu = Submenu::with_items(app, "Help", true, &[&settings, &about])?;
                 let menu = Menu::with_items(app, &[&help_menu])?;
                 app.set_menu(menu)?;
             }
@@ -102,9 +106,15 @@ pub fn run() {
             Ok(())
         })
         .on_menu_event(|app, event| {
-            if event.id().as_ref() == "about" {
-                use tauri::Emitter;
-                let _ = app.emit("open-about", ());
+            use tauri::Emitter;
+            match event.id().as_ref() {
+                "about" => {
+                    let _ = app.emit("open-about", ());
+                }
+                "settings" => {
+                    let _ = app.emit("open-settings", ());
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
