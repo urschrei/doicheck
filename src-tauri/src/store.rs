@@ -90,6 +90,10 @@ impl Store {
                 report_text TEXT NOT NULL,
                 result_json TEXT NOT NULL DEFAULT ''
             );
+            -- checks.document_id is a foreign key joined/filtered/deleted by, but
+            -- SQLite does not auto-index foreign keys; index it so latest-result
+            -- lookups and deletes search rather than scan as history grows.
+            CREATE INDEX IF NOT EXISTS idx_checks_document_id ON checks(document_id);
             -- The per-entry `entries`/`discrepancies` tables were write-only
             -- (nothing read them back; result_json is the source of truth), so
             -- drop them on databases created before this change.
@@ -650,6 +654,43 @@ mod tests {
         assert_eq!(
             store.path_for("sha256:aaa").unwrap().as_deref(),
             Some("/docs/a.pdf")
+        );
+    }
+
+    #[test]
+    fn checks_document_id_is_indexed() {
+        let store = Store::open_in_memory().unwrap();
+        let exists: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_checks_document_id'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            exists, 1,
+            "migration should create the checks(document_id) index"
+        );
+
+        // The latest-result join searches checks via the index, not a full scan.
+        let mut stmt = store
+            .conn
+            .prepare(
+                "EXPLAIN QUERY PLAN SELECT c.result_json FROM checks c \
+                 JOIN documents d ON d.id = c.document_id \
+                 WHERE d.fingerprint = 'x' ORDER BY c.id DESC LIMIT 1",
+            )
+            .unwrap();
+        let plan = stmt
+            .query_map([], |r| r.get::<_, String>(3))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>()
+            .join(" | ");
+        assert!(
+            plan.contains("idx_checks_document_id"),
+            "latest-result join should use the index, plan was: {plan}"
         );
     }
 
