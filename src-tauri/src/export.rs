@@ -9,25 +9,37 @@ pub fn to_json(result: &CheckResult) -> Result<String, serde_json::Error> {
 }
 
 /// One row per entry: ordinal, reference_text, doi, status, unmatched fields, suggested doi, llm_source.
+/// Status values: `clean`, `mismatch`, `matched_via_search`, `not_found`, `retry_needed`, `no_doi`.
+/// For `matched_via_search` and `no_doi` rows the `suggested_doi` column carries the confirmed or
+/// candidate DOI and the `doi` column is empty (the reference cited no DOI).
 pub fn to_csv(result: &CheckResult) -> String {
     let mut out = String::from(
         "ordinal,reference_text,doi,status,unmatched_fields,suggested_doi,llm_source\n",
     );
     for ce in &result.entries {
         let (status, unmatched, suggested): (&str, String, String) = match &ce.outcome {
-            EntryOutcome::Resolved { discrepancies, .. } => {
+            EntryOutcome::Resolved {
+                doi,
+                discrepancies,
+                via_search,
+                ..
+            } => {
                 let unmatched = discrepancies
                     .iter()
                     .filter(|d| !d.dismissed)
                     .map(|d| d.field.as_str())
                     .collect::<Vec<_>>()
                     .join("; ");
-                let status = if unmatched.is_empty() {
-                    "clean"
+                if *via_search {
+                    ("matched_via_search", unmatched, doi.clone())
                 } else {
-                    "mismatch"
-                };
-                (status, unmatched, String::new())
+                    let status = if unmatched.is_empty() {
+                        "clean"
+                    } else {
+                        "mismatch"
+                    };
+                    (status, unmatched, String::new())
+                }
             }
             EntryOutcome::Unresolved { network_error, .. } => {
                 let status = if *network_error {
@@ -99,6 +111,7 @@ mod tests {
                         discrepancies: vec![],
                         from_cache: false,
                         source: Default::default(),
+                        via_search: false,
                     },
                     llm_source: None,
                 },
@@ -118,6 +131,7 @@ mod tests {
                         }],
                         from_cache: false,
                         source: Default::default(),
+                        via_search: false,
                     },
                     llm_source: None,
                 },
@@ -226,6 +240,7 @@ mod tests {
                     discrepancies: vec![],
                     from_cache: false,
                     source: Default::default(),
+                    via_search: false,
                 },
                 llm_source: None,
             }],
@@ -242,5 +257,64 @@ mod tests {
         let json = to_json(&result()).unwrap();
         let back: CheckResult = serde_json::from_str(&json).unwrap();
         assert_eq!(back, result());
+    }
+
+    #[test]
+    fn csv_marks_via_search_matches() {
+        let result = CheckResult {
+            filename: "x.pdf".into(),
+            fingerprint: "fp".into(),
+            run_at: "now".into(),
+            bibliography_detected: true,
+            entries: vec![
+                CheckedEntry {
+                    entry: ReferenceEntry {
+                        ordinal: 1,
+                        raw_text: "Clean via search".into(),
+                        doi: None,
+                    },
+                    outcome: EntryOutcome::Resolved {
+                        doi: "10.1/clean".into(),
+                        discrepancies: vec![],
+                        from_cache: false,
+                        source: Default::default(),
+                        via_search: true,
+                    },
+                    llm_source: None,
+                },
+                CheckedEntry {
+                    entry: ReferenceEntry {
+                        ordinal: 2,
+                        raw_text: "Mismatch via search".into(),
+                        doi: None,
+                    },
+                    outcome: EntryOutcome::Resolved {
+                        doi: "10.1/mism".into(),
+                        discrepancies: vec![Discrepancy {
+                            field: "year".into(),
+                            reference_value: "1999".into(),
+                            crossref_value: "2020".into(),
+                            dismissed: false,
+                        }],
+                        from_cache: false,
+                        source: Default::default(),
+                        via_search: true,
+                    },
+                    llm_source: None,
+                },
+            ],
+        };
+        let csv = to_csv(&result);
+        let lines: Vec<&str> = csv.lines().collect();
+        // doi column empty (no cited DOI), matched DOI in suggested_doi column.
+        assert_eq!(
+            lines[1],
+            "1,Clean via search,,matched_via_search,,10.1/clean,"
+        );
+        // mismatched fields recorded for the amber case.
+        assert_eq!(
+            lines[2],
+            "2,Mismatch via search,,matched_via_search,year,10.1/mism,"
+        );
     }
 }

@@ -37,6 +37,7 @@ fn resolved_outcome(
     meta: &Metadata,
     from_cache: bool,
     source: Source,
+    via_search: bool,
 ) -> EntryOutcome {
     let discrepancies = if crate::text::is_comparable(raw_text) {
         compare(raw_text, meta)
@@ -48,6 +49,7 @@ fn resolved_outcome(
         discrepancies,
         from_cache,
         source,
+        via_search,
     }
 }
 
@@ -83,6 +85,48 @@ fn suggestion_from_hit(
     })
 }
 
+/// Read a matched record from the DOI cache and parse it to comparison
+/// metadata, choosing the parser for the agency the record came from.
+fn cached_metadata(cache: &impl DoiCache, source: Source, doi: &str) -> Option<Metadata> {
+    let json = cache.get(source, &crate::doi::Doi::new(doi))?;
+    Some(match source {
+        Source::Crossref => crate::crossref::metadata_from_json(&json),
+        Source::DataCite => crate::datacite::metadata_from_json(&json),
+    })
+}
+
+/// Decide the outcome for a no-DOI entry from its best search suggestion. A
+/// suggestion whose title is fully present in the reference (strict 100% token
+/// coverage) is promoted to a `Resolved` via-search outcome, comparing the
+/// matched record's metadata; otherwise it stays a `NoDoi` suggestion. The
+/// matched record was seeded into the DOI cache by `suggestion_from_hit`; if it
+/// is absent (e.g. expired) the entry degrades to a suggestion.
+fn finalise_no_doi(
+    suggested: Option<SuggestedDoi>,
+    search_from_cache: bool,
+    raw_text: &str,
+    cache: &impl DoiCache,
+) -> EntryOutcome {
+    if let Some(sug) = &suggested
+        && let Some(meta) = cached_metadata(cache, sug.source, &sug.doi)
+        && let Some(title) = meta.title.as_deref()
+        && token_coverage(raw_text, title) >= 1.0
+    {
+        return resolved_outcome(
+            &sug.doi,
+            raw_text,
+            &meta,
+            search_from_cache,
+            sug.source,
+            true,
+        );
+    }
+    EntryOutcome::NoDoi {
+        suggested,
+        from_cache: search_from_cache,
+    }
+}
+
 /// Cache-first resolution for a single DOI: Crossref first, then DataCite when
 /// Crossref returns a definitive 404 (the DOI is registered with another agency).
 /// A Crossref *network* error stays transient (retry later) and does not fall
@@ -99,7 +143,7 @@ async fn resolve_doi_outcome(
     match fetch_cached(cache, Source::Crossref, &key, client.resolve_json(doi)).await {
         Ok((body, from_cache)) => {
             let meta = crate::crossref::metadata_from_json(&body);
-            return resolved_outcome(doi, raw_text, &meta, from_cache, Source::Crossref);
+            return resolved_outcome(doi, raw_text, &meta, from_cache, Source::Crossref, false);
         }
         Err(LookupError::Network(_)) => return unresolved_outcome(doi, true),
         Err(LookupError::NotFound) => {}
@@ -107,7 +151,7 @@ async fn resolve_doi_outcome(
     match fetch_cached(cache, Source::DataCite, &key, datacite.resolve_json(doi)).await {
         Ok((body, from_cache)) => {
             let meta = crate::datacite::metadata_from_json(&body);
-            resolved_outcome(doi, raw_text, &meta, from_cache, Source::DataCite)
+            resolved_outcome(doi, raw_text, &meta, from_cache, Source::DataCite, false)
         }
         Err(LookupError::Network(_)) => unresolved_outcome(doi, true),
         Err(LookupError::NotFound) => unresolved_outcome(doi, false),
@@ -129,10 +173,7 @@ async fn outcome_for_entry(
             let key = QueryKey::new(&entry.raw_text);
             if let Some(json) = cache.search_get(&key) {
                 let suggested = serde_json::from_str::<SuggestedDoi>(&json).ok();
-                return EntryOutcome::NoDoi {
-                    suggested,
-                    from_cache: true,
-                };
+                return finalise_no_doi(suggested, true, &entry.raw_text, cache);
             }
             // Crossref first; if it offers no suggestion (no good match, no hit,
             // or a search failure), fall back to DataCite. Each agency's hit seeds
@@ -165,10 +206,7 @@ async fn outcome_for_entry(
             {
                 cache.search_put(&key, &json);
             }
-            EntryOutcome::NoDoi {
-                suggested,
-                from_cache: false,
-            }
+            finalise_no_doi(suggested, false, &entry.raw_text, cache)
         }
     }
 }
@@ -518,14 +556,16 @@ mod tests {
         )
         .await;
 
+        // The title "A Study of Widgets" is fully present in the reference text,
+        // so the entry is promoted from a NoDoi suggestion to a via_search Resolved.
         match &result.entries[0].outcome {
-            EntryOutcome::NoDoi {
-                suggested: Some(s), ..
+            EntryOutcome::Resolved {
+                doi, via_search, ..
             } => {
-                assert_eq!(s.doi, "10.1000/xyz");
-                assert!(s.title_match >= 80);
+                assert_eq!(doi, "10.1000/xyz");
+                assert!(*via_search);
             }
-            other => panic!("expected a suggestion, got {other:?}"),
+            other => panic!("expected via_search Resolved, got {other:?}"),
         }
     }
 
@@ -570,15 +610,20 @@ mod tests {
             |_| {},
         )
         .await;
+        // The title "A Study of Widgets" is fully present in the reference text,
+        // so the entry is promoted from a NoDoi suggestion to a via_search Resolved.
         match &result.entries[0].outcome {
-            EntryOutcome::NoDoi {
-                suggested: Some(s), ..
+            EntryOutcome::Resolved {
+                doi,
+                source,
+                via_search,
+                ..
             } => {
-                assert_eq!(s.source, Source::DataCite);
-                assert_eq!(s.doi, "10.5281/zenodo.7");
-                assert!(s.title_match >= 80);
+                assert_eq!(*source, Source::DataCite);
+                assert_eq!(doi, "10.5281/zenodo.7");
+                assert!(*via_search);
             }
-            other => panic!("expected a DataCite suggestion, got {other:?}"),
+            other => panic!("expected via_search DataCite Resolved, got {other:?}"),
         }
     }
 
@@ -612,16 +657,19 @@ mod tests {
             |_| {},
         )
         .await;
+        // The title "A Study of Widgets" is fully present in the reference text,
+        // so the first run produces a via_search Resolved (not a NoDoi suggestion).
         assert!(matches!(
             &first.entries[0].outcome,
-            EntryOutcome::NoDoi {
-                suggested: Some(_),
+            EntryOutcome::Resolved {
+                via_search: true,
                 ..
             }
         ));
 
         // Second run: the search mock is exhausted, so a fresh search would fail.
-        // The suggestion must come from the search cache instead.
+        // The SuggestedDoi is replayed from the search cache; the DOI cache is
+        // still seeded, so the via_search outcome is reproduced from cache.
         let second = run(
             "a.pdf".into(),
             "fp".into(),
@@ -635,17 +683,20 @@ mod tests {
         )
         .await;
         match &second.entries[0].outcome {
-            EntryOutcome::NoDoi {
-                suggested: Some(s),
+            EntryOutcome::Resolved {
+                doi,
+                via_search,
                 from_cache,
+                ..
             } => {
-                assert_eq!(s.doi, "10.1000/xyz");
+                assert_eq!(doi, "10.1000/xyz");
+                assert!(*via_search);
                 assert!(
                     *from_cache,
-                    "the reused suggestion must be marked from_cache"
+                    "the reused via_search match must be marked from_cache"
                 );
             }
-            other => panic!("expected cached suggestion, got {other:?}"),
+            other => panic!("expected cached via_search Resolved, got {other:?}"),
         }
     }
 
@@ -877,6 +928,7 @@ mod tests {
                         discrepancies: vec![],
                         from_cache: false,
                         source: Default::default(),
+                        via_search: false,
                     },
                     llm_source: None,
                 },
@@ -933,6 +985,246 @@ mod tests {
                 .all(|e| matches!(e.outcome, EntryOutcome::Resolved { .. }))
         );
         // `.expect(1)` on the mock asserts a single Crossref call when `server` drops.
+    }
+
+    #[tokio::test]
+    async fn full_search_match_becomes_clean_via_search() {
+        let server = MockServer::start().await;
+        let body = serde_json::json!({
+            "message": { "items": [{
+                "title": ["A Study of Widgets"],
+                "author": [{"family": "Smith"}],
+                "issued": {"date-parts": [[2020]]},
+                "DOI": "10.1000/xyz"
+            }]}
+        });
+        Mock::given(method("GET"))
+            .and(query_param("rows", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let client = CrossrefClient::with_base("", server.uri());
+        let datacite = DataCiteClient::with_base("", server.uri());
+        let cache = MemoryCache::default();
+        let text = "References\nSmith J (2020). A Study of Widgets. Journal of Widgets.";
+        let result = run(
+            "a.pdf".into(),
+            "fp".into(),
+            "now".into(),
+            text,
+            &client,
+            &datacite,
+            &cache,
+            5,
+            |_| {},
+        )
+        .await;
+        match &result.entries[0].outcome {
+            EntryOutcome::Resolved {
+                via_search,
+                discrepancies,
+                source,
+                doi,
+                ..
+            } => {
+                assert!(*via_search, "full-title match should be via_search");
+                assert!(discrepancies.is_empty(), "metadata should match cleanly");
+                assert_eq!(*source, Source::Crossref);
+                assert_eq!(doi, "10.1000/xyz");
+            }
+            other => panic!("expected via_search Resolved, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn full_search_match_with_wrong_year_is_via_search_mismatch() {
+        let server = MockServer::start().await;
+        let body = serde_json::json!({
+            "message": { "items": [{
+                "title": ["A Study of Widgets"],
+                "author": [{"family": "Smith"}],
+                "issued": {"date-parts": [[2020]]},
+                "DOI": "10.1000/xyz"
+            }]}
+        });
+        Mock::given(method("GET"))
+            .and(query_param("rows", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let client = CrossrefClient::with_base("", server.uri());
+        let datacite = DataCiteClient::with_base("", server.uri());
+        let cache = MemoryCache::default();
+        // Title fully present, but the reference cites the wrong year.
+        let text = "References\nSmith J (1999). A Study of Widgets. Journal of Widgets.";
+        let result = run(
+            "a.pdf".into(),
+            "fp".into(),
+            "now".into(),
+            text,
+            &client,
+            &datacite,
+            &cache,
+            5,
+            |_| {},
+        )
+        .await;
+        match &result.entries[0].outcome {
+            EntryOutcome::Resolved {
+                via_search,
+                discrepancies,
+                ..
+            } => {
+                assert!(*via_search);
+                assert!(
+                    discrepancies.iter().any(|d| d.field == "year"),
+                    "expected a year discrepancy, got {discrepancies:?}"
+                );
+            }
+            other => panic!("expected via_search Resolved, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn via_search_match_is_reproduced_from_cache() {
+        let server = MockServer::start().await;
+        let body = serde_json::json!({
+            "message": { "items": [{
+                "title": ["A Study of Widgets"],
+                "author": [{"family": "Smith"}],
+                "issued": {"date-parts": [[2020]]},
+                "DOI": "10.1000/xyz"
+            }]}
+        });
+        // Respond to the search exactly once; a second search would 404.
+        Mock::given(method("GET"))
+            .and(query_param("rows", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        let client = CrossrefClient::with_base("", server.uri());
+        let datacite = DataCiteClient::with_base("", server.uri());
+        let cache = MemoryCache::default();
+        let text = "References\nSmith J (2020). A Study of Widgets. Journal of Widgets.";
+
+        let first = run(
+            "a.pdf".into(),
+            "fp".into(),
+            "now".into(),
+            text,
+            &client,
+            &datacite,
+            &cache,
+            5,
+            |_| {},
+        )
+        .await;
+        assert!(matches!(
+            first.entries[0].outcome,
+            EntryOutcome::Resolved {
+                via_search: true,
+                ..
+            }
+        ));
+
+        // Second run: the search mock is exhausted; the via_search outcome must
+        // be rebuilt from the search cache and the seeded DOI-cache record.
+        let second = run(
+            "a.pdf".into(),
+            "fp".into(),
+            "now".into(),
+            text,
+            &client,
+            &datacite,
+            &cache,
+            5,
+            |_| {},
+        )
+        .await;
+        match &second.entries[0].outcome {
+            EntryOutcome::Resolved {
+                via_search,
+                from_cache,
+                ..
+            } => {
+                assert!(*via_search);
+                assert!(*from_cache, "reused via_search match must be from_cache");
+            }
+            other => panic!("expected cached via_search Resolved, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn partial_search_match_stays_a_suggestion() {
+        let server = MockServer::start().await;
+        // Title has five tokens; the reference omits "today" -> 80% coverage.
+        let body = serde_json::json!({
+            "message": { "items": [{
+                "title": ["A Study of Widgets Today"],
+                "DOI": "10.1000/xyz"
+            }]}
+        });
+        Mock::given(method("GET"))
+            .and(query_param("rows", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let client = CrossrefClient::with_base("", server.uri());
+        let datacite = DataCiteClient::with_base("", server.uri());
+        let cache = MemoryCache::default();
+        let text = "References\nSmith J. A Study of Widgets. Journal of Widgets.";
+        let result = run(
+            "a.pdf".into(),
+            "fp".into(),
+            "now".into(),
+            text,
+            &client,
+            &datacite,
+            &cache,
+            5,
+            |_| {},
+        )
+        .await;
+        match &result.entries[0].outcome {
+            EntryOutcome::NoDoi {
+                suggested: Some(s), ..
+            } => {
+                // 4 of the 5 title tokens present -> exactly 80%, below the
+                // strict 100% promotion threshold, so it stays a suggestion.
+                assert_eq!(s.title_match, 80);
+            }
+            other => panic!("expected NoDoi suggestion, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn full_match_degrades_to_suggestion_when_record_absent() {
+        // A cached suggestion claims a full-title match, but the matched record
+        // is no longer in the DOI cache (e.g. expired independently). Promotion
+        // must degrade gracefully to a NoDoi suggestion rather than panic.
+        let cache = MemoryCache::default();
+        let suggested = Some(SuggestedDoi {
+            doi: "10.1000/gone".into(),
+            title_match: 100,
+            source: Source::Crossref,
+        });
+        let outcome = finalise_no_doi(
+            suggested,
+            true,
+            "Smith J (2020). A Study of Widgets. Journal of Widgets.",
+            &cache,
+        );
+        match outcome {
+            EntryOutcome::NoDoi {
+                suggested: Some(s),
+                from_cache,
+            } => {
+                assert_eq!(s.doi, "10.1000/gone");
+                assert!(from_cache, "the cached search flag must be preserved");
+            }
+            other => panic!("expected NoDoi degrade, got {other:?}"),
+        }
     }
 
     #[tokio::test]

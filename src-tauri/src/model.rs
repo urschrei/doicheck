@@ -66,6 +66,11 @@ pub enum EntryOutcome {
         /// Which agency resolved the DOI.
         #[serde(default)]
         source: Source,
+        /// True when the entry had no cited DOI and was matched by a full-title
+        /// bibliographic search rather than a DOI in the reference. Defaults to
+        /// false so results stored before this field existed still deserialise.
+        #[serde(default)]
+        via_search: bool,
     },
     Unresolved {
         doi: String,
@@ -96,13 +101,17 @@ pub struct Counts {
     pub resolved: usize,
     pub from_cache: usize,
     /// Bibliographic searches performed for no-DOI references (each is one
-    /// Crossref lookup), and how many of those were served from the search cache.
+    /// Crossref or DataCite lookup), and how many of those were served from the
+    /// search cache. Covers both `NoDoi` entries and no-DOI references promoted
+    /// to `Resolved` by a full-title match.
     pub searched: usize,
     pub searched_from_cache: usize,
     pub unresolved: usize,
     pub with_discrepancies: usize,
     pub dismissed: usize,
     pub missing_doi_flagged: usize,
+    /// No-DOI references confirmed by a full-title bibliographic search.
+    pub matched_via_search: usize,
     pub network_failed: usize,
     pub llm_flagged: usize,
 }
@@ -153,17 +162,26 @@ impl CheckResult {
                 EntryOutcome::Resolved {
                     discrepancies,
                     from_cache,
+                    via_search,
                     ..
                 } => {
-                    c.checkable += 1;
-                    c.resolved += 1;
                     let active = discrepancies.iter().filter(|d| !d.dismissed).count();
                     if active > 0 {
                         c.with_discrepancies += 1;
                     }
                     c.dismissed += discrepancies.len() - active;
-                    if *from_cache {
-                        c.from_cache += 1;
+                    if *via_search {
+                        c.matched_via_search += 1;
+                        c.searched += 1;
+                        if *from_cache {
+                            c.searched_from_cache += 1;
+                        }
+                    } else {
+                        c.checkable += 1;
+                        c.resolved += 1;
+                        if *from_cache {
+                            c.from_cache += 1;
+                        }
                     }
                 }
                 EntryOutcome::Unresolved { network_error, .. } => {
@@ -214,6 +232,7 @@ mod tests {
                         discrepancies: vec![],
                         from_cache: true,
                         source: Default::default(),
+                        via_search: false,
                     },
                     llm_source: None,
                 },
@@ -233,6 +252,7 @@ mod tests {
                         }],
                         from_cache: false,
                         source: Default::default(),
+                        via_search: false,
                     },
                     llm_source: None,
                 },
@@ -313,6 +333,56 @@ mod tests {
         let c = result.counts();
         assert_eq!(c.unresolved, 2);
         assert_eq!(c.network_failed, 1);
+    }
+
+    #[test]
+    fn counts_via_search_match_is_separate_from_cited_dois() {
+        let entry = |ordinal, via_search, discrepancies, from_cache| CheckedEntry {
+            entry: ReferenceEntry {
+                ordinal,
+                raw_text: "x".into(),
+                doi: None,
+            },
+            outcome: EntryOutcome::Resolved {
+                doi: "10.1/m".into(),
+                discrepancies,
+                from_cache,
+                source: Default::default(),
+                via_search,
+            },
+            llm_source: None,
+        };
+        let result = CheckResult {
+            filename: "x.pdf".into(),
+            fingerprint: "fp".into(),
+            run_at: "now".into(),
+            bibliography_detected: true,
+            entries: vec![
+                entry(1, true, vec![], true),
+                entry(
+                    2,
+                    true,
+                    vec![Discrepancy {
+                        field: "year".into(),
+                        reference_value: "1999".into(),
+                        crossref_value: "2020".into(),
+                        dismissed: false,
+                    }],
+                    false,
+                ),
+            ],
+        };
+        let c = result.counts();
+        assert_eq!(c.total, 2);
+        // Via-search matches are not cited-DOI entries.
+        assert_eq!(c.checkable, 0);
+        assert_eq!(c.resolved, 0);
+        // Both count as confirmed search matches and as search lookups.
+        assert_eq!(c.matched_via_search, 2);
+        assert_eq!(c.searched, 2);
+        assert_eq!(c.searched_from_cache, 1);
+        // The mismatched one still counts as a discrepancy.
+        assert_eq!(c.with_discrepancies, 1);
     }
 
     #[test]

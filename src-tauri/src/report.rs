@@ -70,6 +70,7 @@ pub fn render(result: &CheckResult) -> String {
         "  No-DOI entries flagged:      {}",
         c.missing_doi_flagged
     );
+    let _ = writeln!(s, "  Matched via search:          {}", c.matched_via_search);
     if c.llm_flagged > 0 {
         let _ = writeln!(s, "  Possible AI sources flagged: {}", c.llm_flagged);
     }
@@ -112,11 +113,15 @@ pub fn render(result: &CheckResult) -> String {
                 doi,
                 discrepancies,
                 source,
+                via_search,
                 ..
             } if discrepancies.iter().any(|d| !d.dismissed) => {
                 any_disc = true;
                 let indent = entry_indent(e.entry.ordinal);
                 let _ = writeln!(s, "  [{}] {}", e.entry.ordinal, snippet(&e.entry.raw_text));
+                if *via_search {
+                    let _ = writeln!(s, "{indent}no DOI; matched via {} search", source.label());
+                }
                 for d in discrepancies.iter().filter(|d| !d.dismissed) {
                     let _ = writeln!(
                         s,
@@ -178,6 +183,23 @@ pub fn render(result: &CheckResult) -> String {
                     sug.title_match
                 );
             }
+            EntryOutcome::Resolved {
+                doi,
+                discrepancies,
+                source,
+                via_search: true,
+                ..
+            } if !discrepancies.iter().any(|d| !d.dismissed) => {
+                any_missing = true;
+                let indent = entry_indent(e.entry.ordinal);
+                let _ = writeln!(s, "  [{}] {}", e.entry.ordinal, snippet(&e.entry.raw_text));
+                let _ = writeln!(
+                    s,
+                    "{indent}no DOI; matched via {} search: {}",
+                    source.label(),
+                    doi
+                );
+            }
             EntryOutcome::NoDoi {
                 suggested: None, ..
             }
@@ -221,6 +243,7 @@ mod tests {
                         }],
                         from_cache: false,
                         source: Default::default(),
+                        via_search: false,
                     },
                     llm_source: None,
                 },
@@ -276,6 +299,7 @@ mod tests {
                         }],
                         from_cache: false,
                         source: Source::DataCite,
+                        via_search: false,
                     },
                     llm_source: None,
                 },
@@ -352,6 +376,72 @@ mod tests {
         // Two-line layout: each detail sits on its own continuation line.
         assert!(text.contains("10.3/www  could not be checked — retry needed"));
         assert!(text.contains("10.2/zzz  DOI not found on Crossref"));
+    }
+
+    #[test]
+    fn renders_via_search_matches() {
+        let result = CheckResult {
+            filename: "x.pdf".into(),
+            fingerprint: "fp".into(),
+            run_at: "now".into(),
+            bibliography_detected: true,
+            entries: vec![
+                CheckedEntry {
+                    entry: ReferenceEntry {
+                        ordinal: 1,
+                        raw_text: "Smith (2020). A clean match.".into(),
+                        doi: None,
+                    },
+                    outcome: EntryOutcome::Resolved {
+                        doi: "10.1/clean".into(),
+                        discrepancies: vec![],
+                        from_cache: false,
+                        source: Source::Crossref,
+                        via_search: true,
+                    },
+                    llm_source: None,
+                },
+                CheckedEntry {
+                    entry: ReferenceEntry {
+                        ordinal: 2,
+                        raw_text: "Lee (1999). A mismatched match.".into(),
+                        doi: None,
+                    },
+                    outcome: EntryOutcome::Resolved {
+                        doi: "10.1/mism".into(),
+                        discrepancies: vec![Discrepancy {
+                            field: "year".into(),
+                            reference_value: "1999".into(),
+                            crossref_value: "2020".into(),
+                            dismissed: false,
+                        }],
+                        from_cache: false,
+                        source: Source::DataCite,
+                        via_search: true,
+                    },
+                    llm_source: None,
+                },
+            ],
+        };
+        let text = render(&result);
+        // Summary line carries the count (two via_search entries here).
+        assert!(
+            text.lines()
+                .any(|l| l.split_whitespace().collect::<Vec<_>>().join(" ")
+                    == "Matched via search: 2"),
+            "{text}"
+        );
+        // Clean via-search entry listed under missing DOIs as a confirmed match.
+        assert!(
+            text.contains("no DOI; matched via Crossref search: 10.1/clean"),
+            "{text}"
+        );
+        // Mismatched via-search entry annotated in the Discrepancies section.
+        assert!(
+            text.contains("no DOI; matched via DataCite search"),
+            "{text}"
+        );
+        assert!(text.contains("10.1/mism  year:"), "{text}");
     }
 
     #[test]
