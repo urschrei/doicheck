@@ -210,6 +210,7 @@ mod tests {
                             dismissed: false,
                         }],
                         from_cache: false,
+                        source: Default::default(),
                     },
                     llm_source: None,
                 },
@@ -223,6 +224,7 @@ mod tests {
                         suggested: Some(SuggestedDoi {
                             doi: "10.1000/xyz".into(),
                             title_match: 82,
+                            source: Default::default(),
                         }),
                         from_cache: false,
                     },

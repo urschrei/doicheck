@@ -3,7 +3,7 @@
 use crate::cache::{DoiCache, QueryKey, SearchCache};
 use crate::compare::compare;
 use crate::crossref::{CrossrefClient, LookupError};
-use crate::model::{CheckResult, CheckedEntry, EntryOutcome, Progress, SuggestedDoi};
+use crate::model::{CheckResult, CheckedEntry, EntryOutcome, Progress, Source, SuggestedDoi};
 use crate::text::token_coverage;
 use futures::stream::{self, StreamExt};
 use std::collections::HashSet;
@@ -19,12 +19,12 @@ async fn resolve_doi_outcome(
     cache: &(impl crate::cache::DoiCache + Sync),
 ) -> EntryOutcome {
     let key = crate::doi::Doi::new(doi);
-    let (json, from_cache) = match cache.get(&key) {
+    let (json, from_cache) = match cache.get(Source::Crossref, &key) {
         Some(j) => (Ok(j), true),
         None => {
             let fetched = client.resolve_json(doi).await;
             if let Ok(ref j) = fetched {
-                cache.put(&key, j);
+                cache.put(Source::Crossref, &key, j);
             }
             (fetched, false)
         }
@@ -41,6 +41,7 @@ async fn resolve_doi_outcome(
                 doi: doi.to_string(),
                 discrepancies,
                 from_cache,
+                source: Source::Crossref,
             }
         }
         Err(LookupError::NotFound) => EntryOutcome::Unresolved {
@@ -79,7 +80,11 @@ async fn outcome_for_entry(
                     // later direct resolve of this DOI is a cache hit. Done
                     // regardless of the suggestion threshold: the record is the
                     // valid Crossref entry for that DOI either way.
-                    cache.put(&crate::doi::Doi::new(&hit.doi), &hit.record);
+                    cache.put(
+                        Source::Crossref,
+                        &crate::doi::Doi::new(&hit.doi),
+                        &hit.record,
+                    );
                     let cov = hit
                         .metadata
                         .title
@@ -91,6 +96,7 @@ async fn outcome_for_entry(
                             doi: hit.doi,
                             // Clamp to the documented 0-100 range of `title_match`.
                             title_match: (cov * 100.0).round().clamp(0.0, 100.0) as u8,
+                            source: Source::Crossref,
                         };
                         if let Ok(json) = serde_json::to_string(&suggested) {
                             cache.search_put(&key, &json);
@@ -472,7 +478,7 @@ mod tests {
 
         // The matched work's record is now in the DOI cache under its DOI, so a
         // later direct resolve is a cache hit with usable metadata.
-        let seeded = cache.get(&crate::doi::Doi::new("10.1000/xyz"));
+        let seeded = cache.get(Source::Crossref, &crate::doi::Doi::new("10.1000/xyz"));
         assert!(seeded.is_some(), "search hit should seed the DOI cache");
         let meta = crate::crossref::metadata_from_json(&seeded.unwrap());
         assert_eq!(meta.title.as_deref(), Some("A Study of Widgets"));
@@ -527,6 +533,7 @@ mod tests {
         let server = MockServer::start().await;
         let cache = MemoryCache::default();
         cache.put(
+            Source::Crossref,
             &crate::doi::Doi::new("10.1000/abc"),
             &serde_json::json!({"message":{"title":["Cached"],"DOI":"10.1000/abc"}}).to_string(),
         );
@@ -573,7 +580,11 @@ mod tests {
             |_| {},
         )
         .await;
-        assert!(cache.get(&crate::doi::Doi::new("10.1000/abc")).is_some());
+        assert!(
+            cache
+                .get(Source::Crossref, &crate::doi::Doi::new("10.1000/abc"))
+                .is_some()
+        );
     }
 
     #[tokio::test]
@@ -602,7 +613,11 @@ mod tests {
             EntryOutcome::Unresolved { network_error, .. } => assert!(*network_error),
             other => panic!("expected transient Unresolved, got {other:?}"),
         }
-        assert!(cache.get(&crate::doi::Doi::new("10.1000/abc")).is_none());
+        assert!(
+            cache
+                .get(Source::Crossref, &crate::doi::Doi::new("10.1000/abc"))
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -646,6 +661,7 @@ mod tests {
                         doi: "10.1000/ok".into(),
                         discrepancies: vec![],
                         from_cache: false,
+                        source: Default::default(),
                     },
                     llm_source: None,
                 },

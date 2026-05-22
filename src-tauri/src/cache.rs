@@ -4,15 +4,16 @@
 //! by a hash of the reference text.
 
 use crate::doi::Doi;
+use crate::model::Source;
 use crate::store::Store;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
 pub trait DoiCache {
-    /// Cached Crossref JSON for a DOI, if present.
-    fn get(&self, doi: &Doi) -> Option<String>;
-    /// Store Crossref JSON for a DOI. Errors are swallowed (best-effort cache).
-    fn put(&self, doi: &Doi, json: &str);
+    /// Cached JSON for a DOI from `source` (Crossref/DataCite), if present.
+    fn get(&self, source: Source, doi: &Doi) -> Option<String>;
+    /// Store JSON for a DOI under `source`. Errors are swallowed (best-effort).
+    fn put(&self, source: Source, doi: &Doi, json: &str);
 }
 
 /// A bibliographic-search cache key: a hash of the normalised reference text.
@@ -47,16 +48,26 @@ pub trait SearchCache {
 /// In-memory cache for tests.
 #[derive(Default)]
 pub struct MemoryCache {
-    map: Mutex<HashMap<String, String>>,
+    crossref: Mutex<HashMap<String, String>>,
+    datacite: Mutex<HashMap<String, String>>,
     search: Mutex<HashMap<String, String>>,
 }
 
-impl DoiCache for MemoryCache {
-    fn get(&self, doi: &Doi) -> Option<String> {
-        self.map.lock().ok()?.get(doi.as_str()).cloned()
+impl MemoryCache {
+    fn doi_map(&self, source: Source) -> &Mutex<HashMap<String, String>> {
+        match source {
+            Source::Crossref => &self.crossref,
+            Source::DataCite => &self.datacite,
+        }
     }
-    fn put(&self, doi: &Doi, json: &str) {
-        if let Ok(mut m) = self.map.lock() {
+}
+
+impl DoiCache for MemoryCache {
+    fn get(&self, source: Source, doi: &Doi) -> Option<String> {
+        self.doi_map(source).lock().ok()?.get(doi.as_str()).cloned()
+    }
+    fn put(&self, source: Source, doi: &Doi, json: &str) {
+        if let Ok(mut m) = self.doi_map(source).lock() {
             m.insert(doi.as_str().to_string(), json.to_string());
         }
     }
@@ -80,32 +91,40 @@ pub struct StoreCache<'a> {
 }
 
 impl DoiCache for StoreCache<'_> {
-    fn get(&self, doi: &Doi) -> Option<String> {
+    fn get(&self, source: Source, doi: &Doi) -> Option<String> {
         let store = match self.store.lock() {
             Ok(store) => store,
             Err(e) => {
-                log::warn!("crossref cache: store lock poisoned on get: {e}");
+                log::warn!("doi cache: store lock poisoned on get: {e}");
                 return None;
             }
         };
-        match store.cache_get(doi.as_str()) {
+        let result = match source {
+            Source::Crossref => store.cache_get(doi.as_str()),
+            Source::DataCite => store.datacite_cache_get(doi.as_str()),
+        };
+        match result {
             Ok(hit) => hit,
             Err(e) => {
-                log::warn!("crossref cache: read failed for {}: {e}", doi.as_str());
+                log::warn!("doi cache: read failed for {}: {e}", doi.as_str());
                 None
             }
         }
     }
-    fn put(&self, doi: &Doi, json: &str) {
+    fn put(&self, source: Source, doi: &Doi, json: &str) {
         let store = match self.store.lock() {
             Ok(store) => store,
             Err(e) => {
-                log::warn!("crossref cache: store lock poisoned on put: {e}");
+                log::warn!("doi cache: store lock poisoned on put: {e}");
                 return;
             }
         };
-        if let Err(e) = store.cache_put(doi.as_str(), json) {
-            log::warn!("crossref cache: write failed for {}: {e}", doi.as_str());
+        let result = match source {
+            Source::Crossref => store.cache_put(doi.as_str(), json),
+            Source::DataCite => store.datacite_cache_put(doi.as_str(), json),
+        };
+        if let Err(e) = result {
+            log::warn!("doi cache: write failed for {}: {e}", doi.as_str());
         }
     }
 }
@@ -149,9 +168,11 @@ mod tests {
     fn memory_cache_round_trips() {
         let c = MemoryCache::default();
         let doi = Doi::new("10.1/x");
-        assert_eq!(c.get(&doi), None);
-        c.put(&doi, "{}");
-        assert_eq!(c.get(&doi).as_deref(), Some("{}"));
+        assert_eq!(c.get(Source::Crossref, &doi), None);
+        c.put(Source::Crossref, &doi, "{}");
+        assert_eq!(c.get(Source::Crossref, &doi).as_deref(), Some("{}"));
+        // The same DOI under a different agency is a separate slot.
+        assert_eq!(c.get(Source::DataCite, &doi), None);
     }
 
     #[test]

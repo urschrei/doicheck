@@ -27,12 +27,24 @@ pub struct Discrepancy {
     pub dismissed: bool,
 }
 
+/// Which DOI registration agency a result came from. Defaults to Crossref so
+/// results stored before this field existed still deserialise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum Source {
+    #[default]
+    Crossref,
+    DataCite,
+}
+
 /// A DOI suggested for an entry that had none, found by title search.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SuggestedDoi {
     pub doi: String,
     /// Title-token match against the reference, 0-100.
     pub title_match: u8,
+    /// Which agency the suggestion was found in.
+    #[serde(default)]
+    pub source: Source,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,6 +53,9 @@ pub enum EntryOutcome {
         doi: String,
         discrepancies: Vec<Discrepancy>,
         from_cache: bool,
+        /// Which agency resolved the DOI.
+        #[serde(default)]
+        source: Source,
     },
     Unresolved {
         doi: String,
@@ -188,6 +203,7 @@ mod tests {
                         doi: "10.1/a".into(),
                         discrepancies: vec![],
                         from_cache: true,
+                        source: Default::default(),
                     },
                     llm_source: None,
                 },
@@ -206,6 +222,7 @@ mod tests {
                             dismissed: false,
                         }],
                         from_cache: false,
+                        source: Default::default(),
                     },
                     llm_source: None,
                 },
@@ -231,6 +248,7 @@ mod tests {
                         suggested: Some(SuggestedDoi {
                             doi: "10.1/d".into(),
                             title_match: 90,
+                            source: Default::default(),
                         }),
                         from_cache: false,
                     },
