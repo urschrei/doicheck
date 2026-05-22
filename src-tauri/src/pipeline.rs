@@ -74,16 +74,37 @@ async fn outcome_for_entry(
                     if cov >= SUGGEST_THRESHOLD {
                         Some(SuggestedDoi {
                             doi: hit.doi,
-                            title_match: (cov * 100.0).round() as u8,
+                            // Clamp to the documented 0-100 range of `title_match`.
+                            title_match: (cov * 100.0).round().clamp(0.0, 100.0) as u8,
                         })
                     } else {
                         None
                     }
                 }
-                _ => None,
+                // No usable suggestion: an empty-DOI hit, no hit, or a search
+                // failure (treated as "no suggestion available").
+                Ok(Some(_))
+                | Ok(None)
+                | Err(CrossrefError::NotFound)
+                | Err(CrossrefError::Network(_)) => None,
             };
             EntryOutcome::NoDoi { suggested }
         }
+    }
+}
+
+/// Count a resolved outcome towards the cache/fetch tallies; other outcomes
+/// contribute to neither. Exhaustive so a new `EntryOutcome` variant forces a
+/// decision here rather than being silently dropped.
+fn tally(outcome: &EntryOutcome, cached: &mut usize, fetched: &mut usize) {
+    match outcome {
+        EntryOutcome::Resolved {
+            from_cache: true, ..
+        } => *cached += 1,
+        EntryOutcome::Resolved {
+            from_cache: false, ..
+        } => *fetched += 1,
+        EntryOutcome::Unresolved { .. } | EntryOutcome::NoDoi { .. } => {}
     }
 }
 
@@ -98,40 +119,35 @@ pub async fn recheck_failures(
     mut progress: impl FnMut(Progress),
 ) -> CheckResult {
     let total = result.entries.len();
-    let retry: HashSet<usize> = result
+    // The entries to retry: those that failed transiently. Capture each one's
+    // DOI and text here so no later re-derivation (and no fabricated key) is
+    // needed. The match is exhaustive, so a new outcome variant forces a choice.
+    let jobs: Vec<(usize, String, String)> = result
         .entries
         .iter()
         .enumerate()
-        .filter(|(_, ce)| {
-            matches!(
-                &ce.outcome,
-                EntryOutcome::Unresolved {
-                    network_error: true,
-                    ..
-                }
-            )
+        .filter_map(|(i, ce)| match &ce.outcome {
+            EntryOutcome::Unresolved {
+                network_error: true,
+                doi,
+            } => Some((i, doi.clone(), ce.entry.raw_text.clone())),
+            EntryOutcome::Unresolved {
+                network_error: false,
+                ..
+            }
+            | EntryOutcome::Resolved { .. }
+            | EntryOutcome::NoDoi { .. } => None,
         })
-        .map(|(i, _)| i)
         .collect();
 
-    // Tally from entries that are not being retried; they are already "done".
+    // Tally the cache/fetch source of already-resolved entries. Entries being
+    // retried are Unresolved and contribute nothing to either count.
     let mut cached = 0usize;
     let mut fetched = 0usize;
-    for (i, ce) in result.entries.iter().enumerate() {
-        if retry.contains(&i) {
-            continue;
-        }
-        match &ce.outcome {
-            EntryOutcome::Resolved {
-                from_cache: true, ..
-            } => cached += 1,
-            EntryOutcome::Resolved {
-                from_cache: false, ..
-            } => fetched += 1,
-            _ => {}
-        }
+    for ce in &result.entries {
+        tally(&ce.outcome, &mut cached, &mut fetched);
     }
-    let mut done = total - retry.len();
+    let mut done = total - jobs.len();
     progress(Progress {
         done,
         total,
@@ -139,32 +155,12 @@ pub async fn recheck_failures(
         fetched,
     });
 
-    let jobs: Vec<(usize, String, String)> = retry
-        .iter()
-        .map(|&i| {
-            let ce = &result.entries[i];
-            let doi = match &ce.outcome {
-                EntryOutcome::Unresolved { doi, .. } => doi.clone(),
-                _ => String::new(),
-            };
-            (i, doi, ce.entry.raw_text.clone())
-        })
-        .collect();
-
     let mut tasks = stream::iter(jobs.into_iter().map(|(i, doi, raw_text)| async move {
         (i, resolve_doi_outcome(&doi, &raw_text, client, cache).await)
     }))
     .buffer_unordered(concurrency.max(1));
     while let Some((i, outcome)) = tasks.next().await {
-        match &outcome {
-            EntryOutcome::Resolved {
-                from_cache: true, ..
-            } => cached += 1,
-            EntryOutcome::Resolved {
-                from_cache: false, ..
-            } => fetched += 1,
-            _ => {}
-        }
+        tally(&outcome, &mut cached, &mut fetched);
         done += 1;
         progress(Progress {
             done,
@@ -223,15 +219,7 @@ pub async fn run(
         }))
         .buffer_unordered(limit);
         while let Some((i, outcome)) = tasks.next().await {
-            match &outcome {
-                EntryOutcome::Resolved {
-                    from_cache: true, ..
-                } => cached += 1,
-                EntryOutcome::Resolved {
-                    from_cache: false, ..
-                } => fetched += 1,
-                _ => {}
-            }
+            tally(&outcome, &mut cached, &mut fetched);
             done += 1;
             progress(Progress {
                 done,
@@ -250,6 +238,8 @@ pub async fn run(
             let llm_source = crate::integrity::llm_source(&entry.raw_text);
             CheckedEntry {
                 entry,
+                // Safe: every index 0..total is placed in exactly one of the two
+                // passes above and filled by the corresponding stream loop.
                 outcome: outcomes[i].take().expect("every entry produced an outcome"),
                 llm_source,
             }
