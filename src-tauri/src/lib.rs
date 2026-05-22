@@ -20,6 +20,11 @@ use commands::AppState;
 use std::sync::Mutex;
 use tauri::Manager;
 
+/// Menu item IDs, shared between menu construction and event dispatch so the two
+/// sites cannot drift.
+const MENU_ABOUT: &str = "about";
+const MENU_SETTINGS: &str = "settings";
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -29,9 +34,9 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
-            let dir = app.path().app_data_dir().expect("app data dir");
+            let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
-            let store = store::Store::open(&dir.join("doicheck.sqlite3")).expect("open store");
+            let store = store::Store::open(&dir.join("doicheck.sqlite3"))?;
             app.manage(AppState {
                 store: Mutex::new(store),
             });
@@ -44,9 +49,10 @@ pub fn run() {
 
             use tauri::menu::{Menu, MenuItem, Submenu};
 
-            let about = MenuItem::with_id(app, "about", "About DOI Checker", true, None::<&str>)?;
+            let about =
+                MenuItem::with_id(app, MENU_ABOUT, "About DOI Checker", true, None::<&str>)?;
             let settings =
-                MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
+                MenuItem::with_id(app, MENU_SETTINGS, "Settings…", true, Some("CmdOrCtrl+,"))?;
 
             #[cfg(target_os = "macos")]
             {
@@ -110,12 +116,17 @@ pub fn run() {
         .on_menu_event(|app, event| {
             use tauri::Emitter;
             match event.id().as_ref() {
-                "about" => {
-                    let _ = app.emit("open-about", ());
+                MENU_ABOUT => {
+                    if let Err(e) = app.emit("open-about", ()) {
+                        log::warn!("failed to emit open-about: {e}");
+                    }
                 }
-                "settings" => {
-                    let _ = app.emit("open-settings", ());
+                MENU_SETTINGS => {
+                    if let Err(e) = app.emit("open-settings", ()) {
+                        log::warn!("failed to emit open-settings: {e}");
+                    }
                 }
+                // Unknown menu IDs are ignored.
                 _ => {}
             }
         })

@@ -20,13 +20,13 @@ fn map_err<E: std::fmt::Display>(e: E) -> String {
 
 #[tauri::command]
 pub fn list_documents(state: State<'_, AppState>) -> Result<Vec<DocumentSummary>, String> {
-    let store = state.store.lock().map_err(|e| e.to_string())?;
+    let store = state.store.lock().map_err(map_err)?;
     store.list_documents().map_err(map_err)
 }
 
 #[tauri::command]
 pub fn get_email(state: State<'_, AppState>) -> Result<String, String> {
-    let store = state.store.lock().map_err(|e| e.to_string())?;
+    let store = state.store.lock().map_err(map_err)?;
     Ok(store
         .get_setting("crossref_email")
         .map_err(map_err)?
@@ -35,7 +35,7 @@ pub fn get_email(state: State<'_, AppState>) -> Result<String, String> {
 
 #[tauri::command]
 pub fn set_email(state: State<'_, AppState>, email: String) -> Result<(), String> {
-    let store = state.store.lock().map_err(|e| e.to_string())?;
+    let store = state.store.lock().map_err(map_err)?;
     store.set_setting("crossref_email", &email).map_err(map_err)
 }
 
@@ -47,7 +47,7 @@ pub fn open_document(
     path: String,
 ) -> Result<Option<crate::model::CheckResult>, String> {
     let ingested = crate::ingest::ingest(&PathBuf::from(&path)).map_err(map_err)?;
-    let store = state.store.lock().map_err(|e| e.to_string())?;
+    let store = state.store.lock().map_err(map_err)?;
     store.latest_result(&ingested.fingerprint).map_err(map_err)
 }
 
@@ -57,7 +57,7 @@ pub fn latest_check(
     state: State<'_, AppState>,
     fingerprint: String,
 ) -> Result<Option<crate::model::CheckResult>, String> {
-    let store = state.store.lock().map_err(|e| e.to_string())?;
+    let store = state.store.lock().map_err(map_err)?;
     store.latest_result(&fingerprint).map_err(map_err)
 }
 
@@ -76,7 +76,7 @@ pub async fn check_document(
     }
 
     let (email, concurrency) = {
-        let store = state.store.lock().map_err(|e| e.to_string())?;
+        let store = state.store.lock().map_err(map_err)?;
         let email = store
             .get_setting("crossref_email")
             .map_err(map_err)?
@@ -111,13 +111,13 @@ pub async fn check_document(
         crate::model::FileKind::Docx => "docx",
     };
     {
-        let mut store = state.store.lock().map_err(|e| e.to_string())?;
+        let mut store = state.store.lock().map_err(map_err)?;
         store
             .save_check(&result, kind, &report_text)
             .map_err(map_err)?;
     }
     {
-        let store = state.store.lock().map_err(|e| e.to_string())?;
+        let store = state.store.lock().map_err(map_err)?;
         if let Some(annotated) = store
             .latest_result(&ingested.fingerprint)
             .map_err(map_err)?
@@ -137,7 +137,7 @@ pub async fn recheck_failures(
     fingerprint: String,
 ) -> Result<crate::model::CheckResult, String> {
     let (result, kind, email, concurrency) = {
-        let store = state.store.lock().map_err(|e| e.to_string())?;
+        let store = state.store.lock().map_err(map_err)?;
         let result = store
             .latest_result(&fingerprint)
             .map_err(map_err)?
@@ -171,12 +171,30 @@ pub async fn recheck_failures(
 
     let report_text = crate::report::render(&updated);
     {
-        let mut store = state.store.lock().map_err(|e| e.to_string())?;
+        let mut store = state.store.lock().map_err(map_err)?;
         store
             .save_check(&updated, &kind, &report_text)
             .map_err(map_err)?;
     }
     Ok(updated)
+}
+
+enum ExportFormat {
+    Txt,
+    Json,
+    Csv,
+}
+
+impl std::str::FromStr for ExportFormat {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "txt" => Ok(Self::Txt),
+            "json" => Ok(Self::Json),
+            "csv" => Ok(Self::Csv),
+            other => Err(format!("unknown export format: {other}")),
+        }
+    }
 }
 
 /// Write a stored report to `path` in the given format ("txt", "json", "csv").
@@ -187,30 +205,16 @@ pub fn export_report(
     fingerprint: String,
     format: String,
 ) -> Result<(), String> {
-    let store = state.store.lock().map_err(|e| e.to_string())?;
-    let content = match format.as_str() {
-        "txt" => {
-            let r = store
-                .latest_result(&fingerprint)
-                .map_err(map_err)?
-                .ok_or_else(|| "no result stored for this document".to_string())?;
-            crate::report::render(&r)
-        }
-        "json" => {
-            let r = store
-                .latest_result(&fingerprint)
-                .map_err(map_err)?
-                .ok_or_else(|| "no result stored for this document".to_string())?;
-            crate::export::to_json(&r).map_err(|e| e.to_string())?
-        }
-        "csv" => {
-            let r = store
-                .latest_result(&fingerprint)
-                .map_err(map_err)?
-                .ok_or_else(|| "no result stored for this document".to_string())?;
-            crate::export::to_csv(&r)
-        }
-        other => return Err(format!("unknown export format: {other}")),
+    let format: ExportFormat = format.parse()?;
+    let store = state.store.lock().map_err(map_err)?;
+    let r = store
+        .latest_result(&fingerprint)
+        .map_err(map_err)?
+        .ok_or_else(|| "no result stored for this document".to_string())?;
+    let content = match format {
+        ExportFormat::Txt => crate::report::render(&r),
+        ExportFormat::Json => crate::export::to_json(&r).map_err(map_err)?,
+        ExportFormat::Csv => crate::export::to_csv(&r),
     };
     std::fs::write(&path, content).map_err(map_err)
 }
@@ -222,7 +226,7 @@ pub fn dismiss_discrepancy(
     doi: String,
     field: String,
 ) -> Result<(), String> {
-    let store = state.store.lock().map_err(|e| e.to_string())?;
+    let store = state.store.lock().map_err(map_err)?;
     store
         .add_dismissal(&fingerprint, &doi, &field)
         .map_err(map_err)
@@ -235,7 +239,7 @@ pub fn undismiss_discrepancy(
     doi: String,
     field: String,
 ) -> Result<(), String> {
-    let store = state.store.lock().map_err(|e| e.to_string())?;
+    let store = state.store.lock().map_err(map_err)?;
     store
         .remove_dismissal(&fingerprint, &doi, &field)
         .map_err(map_err)
@@ -245,31 +249,31 @@ pub fn undismiss_discrepancy(
 /// left intact.
 #[tauri::command]
 pub fn delete_document(state: State<'_, AppState>, fingerprint: String) -> Result<(), String> {
-    let mut store = state.store.lock().map_err(|e| e.to_string())?;
+    let mut store = state.store.lock().map_err(map_err)?;
     store.delete_document(&fingerprint).map_err(map_err)
 }
 
 #[tauri::command]
 pub fn get_reports_dir(state: State<'_, AppState>) -> Result<Option<String>, String> {
-    let store = state.store.lock().map_err(|e| e.to_string())?;
+    let store = state.store.lock().map_err(map_err)?;
     store.get_setting("reports_dir").map_err(map_err)
 }
 
 #[tauri::command]
 pub fn set_reports_dir(state: State<'_, AppState>, dir: String) -> Result<(), String> {
-    let store = state.store.lock().map_err(|e| e.to_string())?;
+    let store = state.store.lock().map_err(map_err)?;
     store.set_setting("reports_dir", &dir).map_err(map_err)
 }
 
 #[tauri::command]
 pub fn get_concurrency(state: State<'_, AppState>) -> Result<u32, String> {
-    let store = state.store.lock().map_err(|e| e.to_string())?;
+    let store = state.store.lock().map_err(map_err)?;
     Ok(store.concurrency() as u32)
 }
 
 #[tauri::command]
 pub fn set_concurrency(state: State<'_, AppState>, value: u32) -> Result<(), String> {
     let clamped = value.clamp(1, 20) as usize;
-    let store = state.store.lock().map_err(|e| e.to_string())?;
+    let store = state.store.lock().map_err(map_err)?;
     store.set_concurrency(clamped).map_err(map_err)
 }
