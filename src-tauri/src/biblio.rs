@@ -27,8 +27,22 @@ static END_HEADING_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 // A numbered marker at the start of an entry, e.g. "[12]" or "12." or "12)".
+// The bare form is capped at three digits so a four-digit publication year that
+// wraps to the start of a line (e.g. "2024. Title…") is not mistaken for a list
+// marker and used as a spurious entry boundary.
 static NUMBER_MARKER_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^\s*(?:\[\d+\]|\d+[.)])\s+").unwrap());
+    LazyLock::new(|| Regex::new(r"(?m)^\s*(?:\[\d+\]|\d{1,3}[.)])\s+").unwrap());
+
+// An author-date opener whose year is *unparenthesised*, as produced by
+// EndNote/Word Harvard styles ("SURNAME, A. 2018. Title" or "ORG 2016. Title").
+// The year often wraps to the next line, so the author list at the start of the
+// line is the signal, not the year. Two shapes: a surname (one or more words,
+// possibly all-caps) followed by ", <Initial>."; or an all-caps organisation
+// author followed directly by a bare year.
+static AUTHOR_START_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:\p{Lu}[\p{L}'’.\- ]*,\s*\p{Lu}\.|\p{Lu}[\p{Lu}'’.\- ]*\s+(?:19|20)\d{2}[.,])")
+        .unwrap()
+});
 
 // A parenthesised publication year, e.g. "(2025)" or "(2018a)". Constrained to
 // 1900-2099 so a journal article/issue number like "Land, 14 (1225)" is not
@@ -56,15 +70,19 @@ pub fn section_after_heading(text: &str) -> Option<&str> {
 }
 
 /// A line begins a new entry if it carries a numbered marker, or it looks like
-/// an author-date opening: starts with an uppercase letter and has a
-/// parenthesised year near the start.
+/// an author-date opening: an uppercase start with a parenthesised year near the
+/// start, or an author list whose year is unparenthesised (see
+/// [`AUTHOR_START_RE`]).
 pub(crate) fn is_entry_start(line: &str) -> bool {
     if NUMBER_MARKER_RE.is_match(line) {
         return true;
     }
     let trimmed = line.trim_start();
     let begins_upper = trimmed.chars().next().is_some_and(|c| c.is_uppercase());
-    begins_upper && YEAR_PAREN_RE.find(trimmed).is_some_and(|m| m.start() <= 80)
+    if begins_upper && YEAR_PAREN_RE.find(trimmed).is_some_and(|m| m.start() <= 80) {
+        return true;
+    }
+    AUTHOR_START_RE.is_match(trimmed)
 }
 
 /// Split a bibliography section into entries by detecting entry starts and
@@ -73,8 +91,12 @@ pub(crate) fn is_entry_start(line: &str) -> bool {
 pub fn split_entries(section: &str) -> Vec<String> {
     let mut entries: Vec<String> = Vec::new();
     let mut current: Option<String> = None;
+    // True when the previous line ended mid-author-list (a trailing "," or "&"),
+    // so an author-shaped line that follows is a wrapped continuation of the same
+    // entry's author list, not the start of a new entry.
+    let mut authors_continue = false;
     for line in section.lines() {
-        if is_entry_start(line) {
+        if is_entry_start(line) && !authors_continue {
             if let Some(buf) = current.take() {
                 let cleaned = collapse_ws(&buf);
                 if !cleaned.is_empty() {
@@ -92,6 +114,8 @@ pub fn split_entries(section: &str) -> Vec<String> {
                 buf.push_str(line);
             }
         }
+        let end = line.trim_end();
+        authors_continue = end.ends_with(',') || end.ends_with('&');
     }
     if let Some(buf) = current {
         let cleaned = collapse_ws(&buf);
@@ -158,15 +182,25 @@ fn running_head_parts(line: &str) -> Option<(String, &str)> {
     Some((prefix.to_lowercase(), num))
 }
 
-/// Remove running page-headers and bare page numbers. A header-shaped line is
-/// dropped only when its prefix recurs on at least three lines with differing
-/// numbers, which marks a repeating header/footer rather than reference content.
+/// Remove running page headers/footers and bare page numbers. A header-shaped
+/// line ("<prefix> <page-number>") is dropped when its prefix recurs on at least
+/// three lines with differing numbers; a constant boilerplate line (e.g. an
+/// author name or ID printed in the footer) is dropped when its exact text
+/// recurs at least three times. Section headings are never dropped.
 fn strip_running_heads(text: &str) -> String {
     use std::collections::{HashMap, HashSet};
+    // Repeating "<prefix> <page-number>" headers, grouped by prefix.
     let mut groups: HashMap<String, HashSet<&str>> = HashMap::new();
+    // Verbatim line frequencies, to catch constant footer/header text that is not
+    // page-number shaped (e.g. an author name or a student/ID number).
+    let mut counts: HashMap<&str, usize> = HashMap::new();
     for line in text.lines() {
         if let Some((prefix, num)) = running_head_parts(line) {
             groups.entry(prefix).or_default().insert(num);
+        }
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            *counts.entry(trimmed).or_default() += 1;
         }
     }
     let strip: HashSet<String> = groups
@@ -174,10 +208,18 @@ fn strip_running_heads(text: &str) -> String {
         .filter(|(_, nums)| nums.len() >= 3)
         .map(|(prefix, _)| prefix)
         .collect();
+    // A header/footer line is short; the cap avoids dropping a (long) reference
+    // even in the unlikely event it is repeated.
+    const MAX_BOILERPLATE_CHARS: usize = 50;
     let mut out = String::with_capacity(text.len());
     for line in text.lines() {
-        let drop = running_head_parts(line).is_some_and(|(prefix, _)| strip.contains(&prefix));
-        if !drop {
+        let trimmed = line.trim();
+        let is_header = running_head_parts(line).is_some_and(|(prefix, _)| strip.contains(&prefix));
+        let is_boilerplate = !trimmed.is_empty()
+            && trimmed.chars().count() <= MAX_BOILERPLATE_CHARS
+            && counts.get(trimmed).is_some_and(|&n| n >= 3)
+            && !HEADING_RE.is_match(trimmed);
+        if !is_header && !is_boilerplate {
             out.push_str(line);
             out.push('\n');
         }
@@ -316,6 +358,82 @@ Tan, Y. (2026) Tigers and flies. Available at: https://example.com/x \n";
             .expect("the Sun reference should be a single entry carrying its DOI");
         assert!(sun.raw_text.contains("Sun"));
         assert!(sun.raw_text.contains("2025"));
+    }
+
+    // Harvard/EndNote author-date with ALL-CAPS surnames and UNPARENTHESISED
+    // years (the year often wraps to its own line). Regression for a real term
+    // paper whose reference list collapsed into a single entry.
+    const CAPS_AUTHOR_DATE: &str = "References\n\
+CARDULLO, P. & KITCHIN, R. 2019. Being a 'citizen' in the smart city: Up and down the \n\
+scaffold of smart citizen participation in Dublin, Ireland. GeoJournal, 84, 1–13.\n\
+CODEMA 2016. Spatial Energy Demand Analysis. Dublin.\n\
+DHINGRA, M., KERR, A. & LEHANE, J. R. Rethinking Digital Twins and Building \n\
+Alternatives for Smart City Planning in Dublin. Proceedings of the 60th ISOCARP \n\
+World Planning Congress, Toronto, ON, Canada, 2024. 8–12.\n\
+RAUSHAN, K., MAC UIDHIR, T., NORTON, B. & AHERN, C. \n\
+2024. A data-driven methodology to validate a large dataset. Energy and Buildings, \n\
+323, 114774.\n\
+SMART DUBLIN 2025. Rethinking Mobility in Ireland. Smart Dublin.\n\
+HAQUE, R., CONCHUBHAIR, D. Ó., RAZZAK, M. A., ZELETI, F. A., \n\
+DERGUECH, W. & CURRY, E. 2026. Toward the Irish Mobility Data Space. AI and \n\
+Robotics, 305–342.\n";
+
+    #[test]
+    fn segments_unparenthesised_caps_author_date() {
+        let bib = detect(CAPS_AUTHOR_DATE);
+        assert!(bib.detected);
+        // One entry per reference: CARDULLO, CODEMA, DHINGRA, RAUSHAN, SMART
+        // DUBLIN, HAQUE.
+        assert_eq!(bib.entries.len(), 6);
+        // A year that wrapped to its own line must NOT start a new entry.
+        let raushan = bib
+            .entries
+            .iter()
+            .find(|e| e.raw_text.contains("RAUSHAN"))
+            .expect("RAUSHAN should be one entry");
+        assert!(raushan.raw_text.contains("2024"));
+        assert!(raushan.raw_text.contains("114774"));
+        // An organisation author with a bare year is its own entry.
+        assert!(
+            bib.entries
+                .iter()
+                .any(|e| e.raw_text.starts_with("CODEMA 2016"))
+        );
+        // An author list that wraps (so a continuation line starts with another
+        // "SURNAME, I.") stays a single entry.
+        let haque = bib
+            .entries
+            .iter()
+            .find(|e| e.raw_text.starts_with("HAQUE"))
+            .expect("HAQUE should be one entry");
+        assert!(haque.raw_text.contains("DERGUECH"));
+        assert!(haque.raw_text.contains("305"));
+    }
+
+    // A page footer that is not page-number shaped (an author name and an ID
+    // number) repeats on every page and must be dropped, not glued onto the
+    // adjacent reference.
+    #[test]
+    fn strips_repeated_non_numeric_footer_lines() {
+        let text = "References\n\
+Smith, J. (2020). Paper one. https://doi.org/10.1/a\n\
+Robert Hynes\n\
+16321228\n\
+Jones, K. (2021). Paper two. https://doi.org/10.2/b\n\
+Robert Hynes\n\
+16321228\n\
+Lee, M. (2022). Paper three. https://doi.org/10.3/c\n\
+Robert Hynes\n\
+16321228\n";
+        let bib = detect(text);
+        assert!(bib.detected);
+        assert_eq!(bib.entries.len(), 3);
+        assert!(
+            bib.entries
+                .iter()
+                .all(|e| !e.raw_text.contains("Robert Hynes") && !e.raw_text.contains("16321228")),
+            "repeated footer lines must be stripped, not glued onto references"
+        );
     }
 
     // A URL split across a line wrap must be rejoined without a space, so the
