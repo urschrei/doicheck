@@ -95,6 +95,7 @@
   .dismissedlist { color: var(--text-muted); }
   .linkbtn { border: 0; background: transparent; color: var(--accent); text-decoration: underline; cursor: pointer; font: inherit; font-size: 11px; padding: 0 0 0 4px; }
   .dismissedlist .linkbtn { color: var(--text-muted); }
+  .suggest { font-size: 12px; color: var(--text-muted); margin: 4px 0; }
   .actions { display: flex; gap: 6px; margin-top: 4px; align-items: center; }
   button { font: inherit; font-size: 12px; padding: 2px 8px; }
   .link { color: var(--accent); text-decoration: underline; cursor: pointer; }
