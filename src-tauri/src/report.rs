@@ -1,6 +1,6 @@
 //! Rendering a CheckResult to the canonical plain-text report.
 
-use crate::model::{CheckResult, EntryOutcome};
+use crate::model::{CheckResult, CheckedEntry, EntryOutcome};
 use std::fmt::Write;
 
 /// A single-line, length-limited identifier for a reference, derived from its
@@ -14,6 +14,23 @@ fn snippet(raw: &str) -> String {
     } else {
         let truncated: String = collapsed.chars().take(MAX).collect();
         format!("{truncated}…")
+    }
+}
+
+/// Indent that aligns continuation lines under the "  [{ordinal}] " entry prefix.
+fn entry_indent(ordinal: usize) -> String {
+    // Width of "  [" (3) + the ordinal's digits + "] " (2).
+    let digits = ordinal.checked_ilog10().map_or(1, |d| d as usize + 1);
+    " ".repeat(3 + digits + 2)
+}
+
+/// Append the "possible AI source" marker line when the entry carries one.
+fn write_marker(s: &mut String, indent: &str, entry: &CheckedEntry) {
+    if let Some(marker) = &entry.llm_source {
+        let _ = writeln!(
+            s,
+            "{indent}** POSSIBLE AI SOURCE - reference URL contains \"{marker}\" **"
+        );
     }
 }
 
@@ -92,7 +109,7 @@ pub fn render(result: &CheckResult) -> String {
                 doi, discrepancies, ..
             } if discrepancies.iter().any(|d| !d.dismissed) => {
                 any_disc = true;
-                let indent = " ".repeat(format!("  [{}] ", e.entry.ordinal).len());
+                let indent = entry_indent(e.entry.ordinal);
                 let _ = writeln!(s, "  [{}] {}", e.entry.ordinal, snippet(&e.entry.raw_text));
                 for d in discrepancies.iter().filter(|d| !d.dismissed) {
                     let _ = writeln!(
@@ -101,13 +118,7 @@ pub fn render(result: &CheckResult) -> String {
                         doi, d.field, d.reference_value, d.crossref_value
                     );
                 }
-                if let Some(marker) = &e.llm_source {
-                    let _ = writeln!(
-                        s,
-                        "{indent}** POSSIBLE AI SOURCE - reference URL contains \"{}\" **",
-                        marker
-                    );
-                }
+                write_marker(&mut s, &indent, e);
             }
             EntryOutcome::Unresolved { doi, network_error } => {
                 any_disc = true;
@@ -116,27 +127,19 @@ pub fn render(result: &CheckResult) -> String {
                 } else {
                     "DOI not found on Crossref"
                 };
-                let indent = " ".repeat(format!("  [{}] ", e.entry.ordinal).len());
+                let indent = entry_indent(e.entry.ordinal);
                 let _ = writeln!(s, "  [{}] {}", e.entry.ordinal, snippet(&e.entry.raw_text));
                 let _ = writeln!(s, "{indent}{}  {}", doi, reason);
-                if let Some(marker) = &e.llm_source {
-                    let _ = writeln!(
-                        s,
-                        "{indent}** POSSIBLE AI SOURCE - reference URL contains \"{}\" **",
-                        marker
-                    );
-                }
+                write_marker(&mut s, &indent, e);
             }
-            _ => {
-                if let Some(marker) = &e.llm_source {
+            // A resolved-but-clean entry or a no-DOI entry only appears in this
+            // section when it carries an AI-source marker.
+            EntryOutcome::Resolved { .. } | EntryOutcome::NoDoi { .. } => {
+                if e.llm_source.is_some() {
                     any_disc = true;
-                    let indent = " ".repeat(format!("  [{}] ", e.entry.ordinal).len());
+                    let indent = entry_indent(e.entry.ordinal);
                     let _ = writeln!(s, "  [{}] {}", e.entry.ordinal, snippet(&e.entry.raw_text));
-                    let _ = writeln!(
-                        s,
-                        "{indent}** POSSIBLE AI SOURCE - reference URL contains \"{}\" **",
-                        marker
-                    );
+                    write_marker(&mut s, &indent, e);
                 }
             }
         }
@@ -149,18 +152,22 @@ pub fn render(result: &CheckResult) -> String {
     let _ = writeln!(s, "Possibly missing DOIs");
     let mut any_missing = false;
     for e in &result.entries {
-        if let EntryOutcome::NoDoi {
-            suggested: Some(sug),
-        } = &e.outcome
-        {
-            any_missing = true;
-            let indent = " ".repeat(format!("  [{}] ", e.entry.ordinal).len());
-            let _ = writeln!(s, "  [{}] {}", e.entry.ordinal, snippet(&e.entry.raw_text));
-            let _ = writeln!(
-                s,
-                "{indent}no DOI; closest Crossref match {} (title match {}%)",
-                sug.doi, sug.title_match
-            );
+        match &e.outcome {
+            EntryOutcome::NoDoi {
+                suggested: Some(sug),
+            } => {
+                any_missing = true;
+                let indent = entry_indent(e.entry.ordinal);
+                let _ = writeln!(s, "  [{}] {}", e.entry.ordinal, snippet(&e.entry.raw_text));
+                let _ = writeln!(
+                    s,
+                    "{indent}no DOI; closest Crossref match {} (title match {}%)",
+                    sug.doi, sug.title_match
+                );
+            }
+            EntryOutcome::NoDoi { suggested: None }
+            | EntryOutcome::Resolved { .. }
+            | EntryOutcome::Unresolved { .. } => {}
         }
     }
     if !any_missing {
