@@ -64,7 +64,7 @@
 
 <div class="toolbar">
   <button class="primary" onclick={pickAndCheck} disabled={busy}>Open</button>
-  <button class="secondary" onclick={() => onrecheck?.()} disabled={busy || !currentPath}>Re-check entire doc</button>
+  <button class="secondary" onclick={() => onrecheck?.()} disabled={busy || !result}>Re-check entire doc</button>
   {#if counts.network > 0}
     <button class="secondary" onclick={() => onrecheckfailures?.()} disabled={busy || !result}>Re-check failures ({counts.network})</button>
   {/if}

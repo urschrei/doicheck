@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import * as api from "$lib/api.js";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
-  import { ask } from "@tauri-apps/plugin-dialog";
+  import { ask, open } from "@tauri-apps/plugin-dialog";
   import Sidebar from "$lib/Sidebar.svelte";
   import ReportPane from "$lib/ReportPane.svelte";
   import Settings from "$lib/Settings.svelte";
@@ -38,6 +38,35 @@
     } finally {
       busy = false;
       progress = null;
+    }
+  }
+
+  // Re-check the whole selected document by fingerprint, using its stored file
+  // path. If the path is unknown or the file has moved, ask the user to locate it.
+  async function recheckEntireDoc() {
+    if (!selectedFingerprint) return;
+    error = "";
+    busy = true;
+    progress = null;
+    let needsLocate = false;
+    try {
+      result = await api.recheckDocument(selectedFingerprint);
+      selectedFingerprint = result.fingerprint;
+      currentPath = "";
+      await refresh();
+    } catch (e) {
+      needsLocate = true;
+    } finally {
+      busy = false;
+      progress = null;
+    }
+    if (needsLocate) {
+      const picked = await open({
+        multiple: false,
+        filters: [{ name: "Documents", extensions: ["pdf", "docx"] }],
+      });
+      if (picked) await runCheck(picked);
+      else error = "Couldn't re-check: the original file wasn't found. Use Open to locate it.";
     }
   }
 
@@ -77,6 +106,9 @@
 
   async function selectDocument(fingerprint) {
     selectedFingerprint = fingerprint;
+    // Clear any path from a previously opened file so a re-check can't act on the
+    // wrong document; the path is resolved server-side from the fingerprint.
+    currentPath = "";
     const stored = await api.latestCheck(fingerprint);
     if (stored) result = stored;
   }
@@ -150,7 +182,7 @@
       {progress}
       {currentPath}
       onopen={openPath}
-      onrecheck={() => currentPath && runCheck(currentPath)}
+      onrecheck={recheckEntireDoc}
       onrecheckfailures={recheckFailures}
       ondismiss={dismissDiscrepancy}
       onundismiss={undismissDiscrepancy}

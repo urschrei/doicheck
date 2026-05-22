@@ -69,14 +69,44 @@ pub async fn check_document(
     state: State<'_, AppState>,
     path: String,
 ) -> Result<crate::model::CheckResult, String> {
-    let ingested = crate::ingest::ingest(&PathBuf::from(&path)).map_err(map_err)?;
+    run_full_check(&app, &state.store, &path).await
+}
+
+/// Re-check an already-known document by fingerprint, re-reading its stored file
+/// path. Errors if no path was recorded or the file no longer exists, so the
+/// caller can fall back to asking the user to locate it.
+#[tauri::command]
+pub async fn recheck_document(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    fingerprint: String,
+) -> Result<crate::model::CheckResult, String> {
+    let path = {
+        let store = state.store.lock().map_err(map_err)?;
+        store.path_for(&fingerprint).map_err(map_err)?
+    };
+    let path = path.ok_or_else(|| "no stored file path for this document".to_string())?;
+    if !std::path::Path::new(&path).exists() {
+        return Err(format!("file no longer exists: {path}"));
+    }
+    run_full_check(&app, &state.store, &path).await
+}
+
+/// Full check of a document at `path`: extract, run the pipeline, persist (and
+/// record the path for later re-checks), and return the annotated result.
+async fn run_full_check(
+    app: &tauri::AppHandle,
+    store: &Mutex<Store>,
+    path: &str,
+) -> Result<crate::model::CheckResult, String> {
+    let ingested = crate::ingest::ingest(&PathBuf::from(path)).map_err(map_err)?;
     let text = crate::extract::extract_text(&ingested.bytes, ingested.kind).map_err(map_err)?;
     if !crate::extract::has_usable_text(&text) {
         return Err("no extractable text (image-only PDF?)".to_string());
     }
 
     let (email, concurrency) = {
-        let store = state.store.lock().map_err(map_err)?;
+        let store = store.lock().map_err(map_err)?;
         let email = store
             .get_setting("crossref_email")
             .map_err(map_err)?
@@ -87,9 +117,7 @@ pub async fn check_document(
     let client = CrossrefClient::new(&email);
     let run_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
-    let cache = StoreCache {
-        store: &state.store,
-    };
+    let cache = StoreCache { store };
     let app_for_progress = app.clone();
     let result = crate::pipeline::run(
         ingested.filename.clone(),
@@ -111,13 +139,16 @@ pub async fn check_document(
         crate::model::FileKind::Docx => "docx",
     };
     {
-        let mut store = state.store.lock().map_err(map_err)?;
+        let mut store = store.lock().map_err(map_err)?;
         store
             .save_check(&result, kind, &report_text)
             .map_err(map_err)?;
+        store
+            .set_document_path(&ingested.fingerprint, path)
+            .map_err(map_err)?;
     }
     {
-        let store = state.store.lock().map_err(map_err)?;
+        let store = store.lock().map_err(map_err)?;
         if let Some(annotated) = store
             .latest_result(&ingested.fingerprint)
             .map_err(map_err)?
