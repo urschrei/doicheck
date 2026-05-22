@@ -7,6 +7,25 @@ use std::sync::LazyLock;
 static DOI_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)10\.\d{4,9}/[-._;()/:a-z0-9]+").unwrap());
 
+/// A DOI in normalised form. The only constructor runs [`normalise`], so every
+/// `Doi` value is a lower-cased, canonical key. Use it at API boundaries (e.g.
+/// the cache) to make the normalisation invariant a compile-time guarantee
+/// rather than a caller obligation.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Doi(String);
+
+impl Doi {
+    /// Normalise `raw` into a `Doi`.
+    pub fn new(raw: &str) -> Self {
+        Doi(normalise(raw))
+    }
+
+    /// The normalised DOI string.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Normalise a DOI: drop a URL or `doi:` prefix, lowercase, strip trailing
 /// punctuation that commonly clings to DOIs in reference lists.
 pub fn normalise(raw: &str) -> String {
@@ -109,6 +128,14 @@ mod tests {
     #[test]
     fn first_in_finds_none_when_absent() {
         assert_eq!(first_in("no identifier here"), None);
+    }
+
+    #[test]
+    fn doi_newtype_normalises_on_construction() {
+        assert_eq!(
+            Doi::new("https://doi.org/10.1000/XYZ.").as_str(),
+            "10.1000/xyz"
+        );
     }
 
     // An already-normalised DOI must be a fixed point of `normalise`.
