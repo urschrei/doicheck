@@ -1,6 +1,6 @@
 //! SQLite persistence for documents, checks, entries, discrepancies, settings.
 
-use crate::model::{CheckResult, EntryOutcome};
+use crate::model::CheckResult;
 use rusqlite::{Connection, params};
 
 #[derive(Debug, thiserror::Error)]
@@ -80,21 +80,11 @@ impl Store {
                 report_text TEXT NOT NULL,
                 result_json TEXT NOT NULL DEFAULT ''
             );
-            CREATE TABLE IF NOT EXISTS entries (
-                id INTEGER PRIMARY KEY,
-                check_id INTEGER NOT NULL REFERENCES checks(id),
-                ordinal INTEGER NOT NULL,
-                raw_text TEXT NOT NULL,
-                doi TEXT,
-                status TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS discrepancies (
-                id INTEGER PRIMARY KEY,
-                entry_id INTEGER NOT NULL REFERENCES entries(id),
-                field TEXT NOT NULL,
-                reference_value TEXT NOT NULL,
-                crossref_value TEXT NOT NULL
-            );
+            -- The per-entry `entries`/`discrepancies` tables were write-only
+            -- (nothing read them back; result_json is the source of truth), so
+            -- drop them on databases created before this change.
+            DROP TABLE IF EXISTS discrepancies;
+            DROP TABLE IF EXISTS entries;
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -208,9 +198,10 @@ impl Store {
         Ok(())
     }
 
-    /// Persist a check (and its document, entries, discrepancies). `kind` is the
-    /// file kind as a short string ("pdf"/"docx"). `report_text` is the rendered
-    /// report. Returns the new check id.
+    /// Persist a check and its document. `kind` is the file kind as a short
+    /// string ("pdf"/"docx"). `report_text` is the rendered report. The full
+    /// structured result is stored as JSON in `result_json`. Returns the new
+    /// check id.
     pub fn save_check(
         &mut self,
         result: &CheckResult,
@@ -254,42 +245,6 @@ impl Store {
             ],
         )?;
         let check_id = tx.last_insert_rowid();
-        for e in &result.entries {
-            let status = match &e.outcome {
-                EntryOutcome::Resolved { discrepancies, .. } if discrepancies.is_empty() => {
-                    "resolved"
-                }
-                EntryOutcome::Resolved { .. } => "resolved_with_discrepancies",
-                EntryOutcome::Unresolved {
-                    network_error: true,
-                    ..
-                } => "network_error",
-                EntryOutcome::Unresolved { .. } => "not_found",
-                EntryOutcome::NoDoi { suggested: Some(_) } => "no_doi_suggested",
-                EntryOutcome::NoDoi { suggested: None } => "no_doi",
-            };
-            tx.execute(
-                "INSERT INTO entries(check_id, ordinal, raw_text, doi, status)
-                 VALUES(?1,?2,?3,?4,?5)",
-                params![
-                    check_id,
-                    e.entry.ordinal as i64,
-                    e.entry.raw_text,
-                    e.entry.doi,
-                    status
-                ],
-            )?;
-            let entry_id = tx.last_insert_rowid();
-            if let EntryOutcome::Resolved { discrepancies, .. } = &e.outcome {
-                for d in discrepancies {
-                    tx.execute(
-                        "INSERT INTO discrepancies(entry_id, field, reference_value, crossref_value)
-                         VALUES(?1,?2,?3,?4)",
-                        params![entry_id, d.field, d.reference_value, d.crossref_value],
-                    )?;
-                }
-            }
-        }
         tx.commit()?;
         Ok(check_id)
     }
@@ -400,8 +355,8 @@ impl Store {
         }
     }
 
-    /// Delete a document and all its checks/entries/discrepancies. The shared
-    /// DOI cache (`crossref_cache`) is deliberately left intact.
+    /// Delete a document and all its checks. The shared DOI cache
+    /// (`crossref_cache`) is deliberately left intact.
     pub fn delete_document(&mut self, fingerprint: &str) -> Result<(), StoreError> {
         use rusqlite::OptionalExtension;
         let tx = self.conn.transaction()?;
@@ -413,17 +368,6 @@ impl Store {
             )
             .optional()?;
         if let Some(doc_id) = doc_id {
-            tx.execute(
-                "DELETE FROM discrepancies WHERE entry_id IN
-                   (SELECT e.id FROM entries e JOIN checks c ON c.id = e.check_id
-                    WHERE c.document_id = ?1)",
-                params![doc_id],
-            )?;
-            tx.execute(
-                "DELETE FROM entries WHERE check_id IN
-                   (SELECT id FROM checks WHERE document_id = ?1)",
-                params![doc_id],
-            )?;
             tx.execute("DELETE FROM checks WHERE document_id = ?1", params![doc_id])?;
             tx.execute("DELETE FROM documents WHERE id = ?1", params![doc_id])?;
         }
@@ -478,7 +422,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{CheckedEntry, Discrepancy, ReferenceEntry};
+    use crate::model::{CheckedEntry, Discrepancy, EntryOutcome, ReferenceEntry};
 
     fn sample() -> CheckResult {
         CheckResult {
