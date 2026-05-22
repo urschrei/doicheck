@@ -51,13 +51,15 @@ export function llmSource(entry) {
   return entry.llm_source || null;
 }
 
-// How many resolved entries came from the local cache vs a fresh Crossref fetch.
+// Crossref lookups served from the local cache vs fetched fresh, across both
+// DOI resolves (Resolved) and bibliographic searches for no-DOI refs (NoDoi).
 export function cacheTally(result) {
   let cached = 0;
   let fetched = 0;
   for (const e of result?.entries ?? []) {
-    if (e.outcome.Resolved) {
-      if (e.outcome.Resolved.from_cache) cached += 1;
+    const lookup = e.outcome.Resolved ?? e.outcome.NoDoi;
+    if (lookup) {
+      if (lookup.from_cache) cached += 1;
       else fetched += 1;
     }
   }

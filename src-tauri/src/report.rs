@@ -53,11 +53,13 @@ pub fn render(result: &CheckResult) -> String {
     }
     let _ = writeln!(s, "  Checkable (with DOI):        {}", c.checkable);
     let _ = writeln!(s, "  Resolved on Crossref:        {}", c.resolved);
+    // Crossref lookups (DOI resolves + bibliographic searches) served from cache
+    // versus the total made, so the figure reflects every avoided Crossref call.
+    let from_cache = c.from_cache + c.searched_from_cache;
+    let lookups = c.resolved + c.searched;
     let _ = writeln!(
         s,
-        "    from cache: {}, fetched: {}",
-        c.from_cache,
-        c.resolved.saturating_sub(c.from_cache)
+        "  Crossref lookups from cache: {from_cache} of {lookups}"
     );
     let _ = writeln!(s, "  Not resolved:                {}", c.unresolved);
     let _ = writeln!(s, "  Entries with discrepancies:  {}", c.with_discrepancies);
@@ -155,6 +157,7 @@ pub fn render(result: &CheckResult) -> String {
         match &e.outcome {
             EntryOutcome::NoDoi {
                 suggested: Some(sug),
+                ..
             } => {
                 any_missing = true;
                 let indent = entry_indent(e.entry.ordinal);
@@ -165,7 +168,9 @@ pub fn render(result: &CheckResult) -> String {
                     sug.doi, sug.title_match
                 );
             }
-            EntryOutcome::NoDoi { suggested: None }
+            EntryOutcome::NoDoi {
+                suggested: None, ..
+            }
             | EntryOutcome::Resolved { .. }
             | EntryOutcome::Unresolved { .. } => {}
         }
@@ -219,6 +224,7 @@ mod tests {
                             doi: "10.1000/xyz".into(),
                             title_match: 82,
                         }),
+                        from_cache: false,
                     },
                     llm_source: None,
                 },

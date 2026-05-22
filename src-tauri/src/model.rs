@@ -48,6 +48,11 @@ pub enum EntryOutcome {
     },
     NoDoi {
         suggested: Option<SuggestedDoi>,
+        /// Whether the bibliographic search that produced `suggested` was served
+        /// from the search cache rather than fetched from Crossref. Defaults to
+        /// false so results stored before this field existed still deserialise.
+        #[serde(default)]
+        from_cache: bool,
     },
 }
 
@@ -65,6 +70,10 @@ pub struct Counts {
     pub checkable: usize,
     pub resolved: usize,
     pub from_cache: usize,
+    /// Bibliographic searches performed for no-DOI references (each is one
+    /// Crossref lookup), and how many of those were served from the search cache.
+    pub searched: usize,
+    pub searched_from_cache: usize,
     pub unresolved: usize,
     pub with_discrepancies: usize,
     pub dismissed: usize,
@@ -139,7 +148,14 @@ impl CheckResult {
                         c.network_failed += 1;
                     }
                 }
-                EntryOutcome::NoDoi { suggested } => {
+                EntryOutcome::NoDoi {
+                    suggested,
+                    from_cache,
+                } => {
+                    c.searched += 1;
+                    if *from_cache {
+                        c.searched_from_cache += 1;
+                    }
                     if suggested.is_some() {
                         c.missing_doi_flagged += 1;
                     }
@@ -216,6 +232,7 @@ mod tests {
                             doi: "10.1/d".into(),
                             title_match: 90,
                         }),
+                        from_cache: false,
                     },
                     llm_source: None,
                 },
@@ -268,5 +285,33 @@ mod tests {
         let c = result.counts();
         assert_eq!(c.unresolved, 2);
         assert_eq!(c.network_failed, 1);
+    }
+
+    #[test]
+    fn counts_track_search_cache_hits() {
+        let no_doi = |ordinal, from_cache| CheckedEntry {
+            entry: ReferenceEntry {
+                ordinal,
+                raw_text: "x".into(),
+                doi: None,
+            },
+            outcome: EntryOutcome::NoDoi {
+                suggested: None,
+                from_cache,
+            },
+            llm_source: None,
+        };
+        let result = CheckResult {
+            filename: "x.pdf".into(),
+            fingerprint: "abc".into(),
+            run_at: "now".into(),
+            bibliography_detected: true,
+            entries: vec![no_doi(1, true), no_doi(2, false), no_doi(3, true)],
+        };
+        let c = result.counts();
+        // Every no-DOI entry is one bibliographic-search lookup.
+        assert_eq!(c.searched, 3);
+        // Two of them were served from the search cache.
+        assert_eq!(c.searched_from_cache, 2);
     }
 }
