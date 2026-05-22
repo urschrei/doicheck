@@ -2,7 +2,7 @@
 
 use crate::cache::{DoiCache, QueryKey, SearchCache};
 use crate::compare::compare;
-use crate::crossref::{CrossrefClient, CrossrefError};
+use crate::crossref::{CrossrefClient, LookupError};
 use crate::model::{CheckResult, CheckedEntry, EntryOutcome, Progress, SuggestedDoi};
 use crate::text::token_coverage;
 use futures::stream::{self, StreamExt};
@@ -43,11 +43,11 @@ async fn resolve_doi_outcome(
                 from_cache,
             }
         }
-        Err(CrossrefError::NotFound) => EntryOutcome::Unresolved {
+        Err(LookupError::NotFound) => EntryOutcome::Unresolved {
             doi: doi.to_string(),
             network_error: false,
         },
-        Err(CrossrefError::Network(_)) => EntryOutcome::Unresolved {
+        Err(LookupError::Network(_)) => EntryOutcome::Unresolved {
             doi: doi.to_string(),
             network_error: true,
         },
@@ -104,8 +104,8 @@ async fn outcome_for_entry(
                 // failure (treated as "no suggestion available").
                 Ok(Some(_))
                 | Ok(None)
-                | Err(CrossrefError::NotFound)
-                | Err(CrossrefError::Network(_)) => None,
+                | Err(LookupError::NotFound)
+                | Err(LookupError::Network(_)) => None,
             };
             EntryOutcome::NoDoi {
                 suggested,

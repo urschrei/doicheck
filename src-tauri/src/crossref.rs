@@ -12,13 +12,8 @@ fn unescape(s: &str) -> String {
         .unwrap_or_else(|_| s.to_string())
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum CrossrefError {
-    #[error("network error: {0}")]
-    Network(String),
-    #[error("doi not found")]
-    NotFound,
-}
+pub use crate::lookup::LookupError;
+use crate::lookup::send_with_retry;
 
 #[derive(Clone)]
 pub struct CrossrefClient {
@@ -104,17 +99,6 @@ pub struct SearchHit {
     pub record: String,
 }
 
-/// Read a `Retry-After` header value (seconds) from a response.
-fn retry_after(resp: &reqwest::Response) -> Option<Duration> {
-    resp.headers()
-        .get(reqwest::header::RETRY_AFTER)?
-        .to_str()
-        .ok()?
-        .parse::<u64>()
-        .ok()
-        .map(Duration::from_secs)
-}
-
 impl CrossrefClient {
     /// `email` is included in the User-Agent for the Crossref polite pool.
     pub fn new(email: &str) -> Self {
@@ -148,88 +132,40 @@ impl CrossrefClient {
         c
     }
 
-    /// Exponential backoff duration for `attempt` (0-indexed).
-    fn backoff(&self, attempt: u32) -> Duration {
-        self.base_delay.saturating_mul(2u32.saturating_pow(attempt))
-    }
-
-    /// Send a request built by `build`, retrying on HTTP 429/5xx and send
-    /// errors, up to `self.max_retries` times with exponential backoff.
-    async fn send_with_retry(
-        &self,
-        build: impl Fn() -> reqwest::RequestBuilder,
-    ) -> Result<reqwest::Response, CrossrefError> {
-        let mut attempt: u32 = 0;
-        loop {
-            match build().send().await {
-                Ok(resp) => {
-                    let s = resp.status();
-                    let transient =
-                        s == reqwest::StatusCode::TOO_MANY_REQUESTS || s.is_server_error();
-                    if transient {
-                        if attempt < self.max_retries {
-                            let delay = retry_after(&resp).unwrap_or_else(|| self.backoff(attempt));
-                            attempt += 1;
-                            tokio::time::sleep(delay).await;
-                            continue;
-                        }
-                        // Retries exhausted on a transient status: treat as a
-                        // transient network failure (so it is not cached and can
-                        // be re-checked later).
-                        return Err(CrossrefError::Network(format!(
-                            "crossref returned {s} after {} retries",
-                            self.max_retries
-                        )));
-                    }
-                    return Ok(resp);
-                }
-                Err(e) => {
-                    if attempt < self.max_retries {
-                        let delay = self.backoff(attempt);
-                        attempt += 1;
-                        tokio::time::sleep(delay).await;
-                        continue;
-                    }
-                    return Err(CrossrefError::Network(e.to_string()));
-                }
-            }
-        }
-    }
-
     /// Fetch the raw JSON body for a DOI from the Crossref `/works/{doi}` endpoint.
-    pub async fn resolve_json(&self, doi: &str) -> Result<String, CrossrefError> {
+    pub async fn resolve_json(&self, doi: &str) -> Result<String, LookupError> {
         let url = format!("{}/works/{}", self.base, urlencoding::encode(doi));
-        let resp = self.send_with_retry(|| self.http.get(&url)).await?;
+        let resp =
+            send_with_retry(self.max_retries, self.base_delay, || self.http.get(&url)).await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            return Err(CrossrefError::NotFound);
+            return Err(LookupError::NotFound);
         }
         resp.error_for_status()
-            .map_err(|e| CrossrefError::Network(e.to_string()))?
+            .map_err(|e| LookupError::Network(e.to_string()))?
             .text()
             .await
-            .map_err(|e| CrossrefError::Network(e.to_string()))
+            .map_err(|e| LookupError::Network(e.to_string()))
     }
 
-    pub async fn resolve(&self, doi: &str) -> Result<Metadata, CrossrefError> {
+    pub async fn resolve(&self, doi: &str) -> Result<Metadata, LookupError> {
         let body = self.resolve_json(doi).await?;
         Ok(metadata_from_json(&body))
     }
 
-    pub async fn search(&self, reference: &str) -> Result<Option<SearchHit>, CrossrefError> {
+    pub async fn search(&self, reference: &str) -> Result<Option<SearchHit>, LookupError> {
         let url = format!("{}/works", self.base);
-        let resp = self
-            .send_with_retry(|| {
-                self.http
-                    .get(&url)
-                    .query(&[("query.bibliographic", reference), ("rows", "1")])
-            })
-            .await?;
+        let resp = send_with_retry(self.max_retries, self.base_delay, || {
+            self.http
+                .get(&url)
+                .query(&[("query.bibliographic", reference), ("rows", "1")])
+        })
+        .await?;
         let body: SearchMessage = resp
             .error_for_status()
-            .map_err(|e| CrossrefError::Network(e.to_string()))?
+            .map_err(|e| LookupError::Network(e.to_string()))?
             .json()
             .await
-            .map_err(|e| CrossrefError::Network(e.to_string()))?;
+            .map_err(|e| LookupError::Network(e.to_string()))?;
         Ok(body.message.items.into_iter().next().and_then(|w| {
             if w.doi.is_empty() {
                 return None;
