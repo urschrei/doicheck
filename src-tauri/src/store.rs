@@ -7,6 +7,8 @@ use rusqlite::{Connection, params};
 pub enum StoreError {
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
+    #[error("failed to serialise check result: {0}")]
+    Serde(#[from] serde_json::Error),
 }
 
 /// Cached Crossref records older than this are treated as a miss and re-fetched,
@@ -18,12 +20,23 @@ pub struct Store {
     conn: Connection,
 }
 
+/// Sidebar status for a document. The serialised (kebab-case) form is the wire
+/// contract consumed by the frontend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DocumentStatus {
+    Incomplete,
+    Failed,
+    HasIssues,
+    Clean,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DocumentSummary {
     pub fingerprint: String,
     pub filename: String,
     pub last_checked: String,
-    pub status: String,
+    pub status: DocumentStatus,
 }
 
 impl Store {
@@ -99,6 +112,9 @@ impl Store {
             );
             "#,
         )?;
+        // Backfill columns for databases created before they were added to the
+        // CREATE TABLE above; on a fresh DB these checks find the column and the
+        // ALTERs are skipped.
         let has_result_json: bool = self.conn.query_row(
             "SELECT COUNT(*) FROM pragma_table_info('checks') WHERE name = 'result_json'",
             [],
@@ -146,7 +162,8 @@ impl Store {
     }
 
     /// Number of concurrent Crossref requests. Defaults to 5 if absent or
-    /// invalid; clamped to 1..=20.
+    /// invalid; clamped to 1..=20. A DB read error is intentionally treated as
+    /// "absent" so a transient settings-read failure falls back to the default.
     pub fn concurrency(&self) -> usize {
         self.get_setting("concurrency")
             .ok()
@@ -201,6 +218,9 @@ impl Store {
         report_text: &str,
     ) -> Result<i64, StoreError> {
         let counts = result.counts();
+        // Serialise before opening the transaction so a failure aborts the write
+        // rather than committing a row with an empty, unreadable result_json.
+        let result_json = serde_json::to_string(result)?;
         let tx = self.conn.transaction()?;
         tx.execute(
             "INSERT INTO documents(fingerprint, filename, kind, first_seen, last_checked)
@@ -230,7 +250,7 @@ impl Store {
                 counts.missing_doi_flagged as i64,
                 counts.network_failed as i64,
                 report_text,
-                serde_json::to_string(result).unwrap_or_default()
+                result_json
             ],
         )?;
         let check_id = tx.last_insert_rowid();
@@ -352,7 +372,15 @@ impl Store {
                         result.apply_dismissals(&set);
                         Ok(Some(result))
                     }
-                    Err(_) => Ok(None),
+                    // An old row written by a previous model version may no longer
+                    // parse. Log it and report "no result" so the document can be
+                    // re-checked, rather than failing the whole call.
+                    Err(e) => {
+                        log::warn!(
+                            "store: stored result for {fingerprint} did not parse ({e}); treating as no result"
+                        );
+                        Ok(None)
+                    }
                 }
             }
             None => Ok(None),
@@ -425,18 +453,17 @@ impl Store {
                     let c = result.counts();
                     let not_found = c.unresolved.saturating_sub(c.network_failed);
                     if c.network_failed > 0 {
-                        "incomplete"
+                        DocumentStatus::Incomplete
                     } else if not_found > 0 {
-                        "failed"
+                        DocumentStatus::Failed
                     } else if c.with_discrepancies > 0 {
-                        "has-issues"
+                        DocumentStatus::HasIssues
                     } else {
-                        "clean"
+                        DocumentStatus::Clean
                     }
                 }
-                None => "clean",
-            }
-            .to_string();
+                None => DocumentStatus::Clean,
+            };
             out.push(DocumentSummary {
                 fingerprint,
                 filename,
@@ -490,7 +517,7 @@ mod tests {
         );
         let docs = store.list_documents().unwrap();
         assert_eq!(docs.len(), 1);
-        assert_eq!(docs[0].status, "has-issues");
+        assert_eq!(docs[0].status, DocumentStatus::HasIssues);
     }
 
     #[test]
@@ -585,7 +612,7 @@ mod tests {
         store.save_check(&r, "pdf", "T").unwrap();
         let docs = store.list_documents().unwrap();
         let d = docs.iter().find(|d| d.fingerprint == "sha256:net").unwrap();
-        assert_eq!(d.status, "incomplete");
+        assert_eq!(d.status, DocumentStatus::Incomplete);
     }
 
     #[test]
@@ -608,7 +635,20 @@ mod tests {
         store.save_check(&r, "pdf", "T").unwrap();
         let docs = store.list_documents().unwrap();
         let d = docs.iter().find(|d| d.fingerprint == "sha256:nf").unwrap();
-        assert_eq!(d.status, "failed");
+        assert_eq!(d.status, DocumentStatus::Failed);
+    }
+
+    #[test]
+    fn document_status_serialises_to_frontend_strings() {
+        let pairs = [
+            (DocumentStatus::Incomplete, "incomplete"),
+            (DocumentStatus::Failed, "failed"),
+            (DocumentStatus::HasIssues, "has-issues"),
+            (DocumentStatus::Clean, "clean"),
+        ];
+        for (status, expected) in pairs {
+            assert_eq!(serde_json::to_value(status).unwrap(), expected);
+        }
     }
 
     #[test]
@@ -644,16 +684,25 @@ mod tests {
         let mut store = Store::open_in_memory().unwrap();
         store.save_check(&sample(), "pdf", "T").unwrap();
         // sample() has one resolved entry with a 'year' discrepancy on DOI 10.1/a.
-        assert_eq!(store.list_documents().unwrap()[0].status, "has-issues");
+        assert_eq!(
+            store.list_documents().unwrap()[0].status,
+            DocumentStatus::HasIssues
+        );
         store.add_dismissal("sha256:aaa", "10.1/a", "year").unwrap();
         let r = store.latest_result("sha256:aaa").unwrap().unwrap();
         // The discrepancy is now annotated dismissed, so no active issues.
         assert_eq!(r.counts().with_discrepancies, 0);
         assert_eq!(r.counts().dismissed, 1);
-        assert_eq!(store.list_documents().unwrap()[0].status, "clean");
+        assert_eq!(
+            store.list_documents().unwrap()[0].status,
+            DocumentStatus::Clean
+        );
         store
             .remove_dismissal("sha256:aaa", "10.1/a", "year")
             .unwrap();
-        assert_eq!(store.list_documents().unwrap()[0].status, "has-issues");
+        assert_eq!(
+            store.list_documents().unwrap()[0].status,
+            DocumentStatus::HasIssues
+        );
     }
 }
