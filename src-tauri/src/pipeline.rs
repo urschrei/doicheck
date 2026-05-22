@@ -1,57 +1,116 @@
 //! Orchestration: extracted text -> bibliography -> per-entry Crossref checks.
 
 use crate::cache::{DoiCache, QueryKey, SearchCache};
-use crate::compare::compare;
-use crate::crossref::{CrossrefClient, LookupError};
+use crate::compare::{Metadata, compare};
+use crate::crossref::{CrossrefClient, LookupError, SearchHit};
+use crate::datacite::DataCiteClient;
 use crate::model::{CheckResult, CheckedEntry, EntryOutcome, Progress, Source, SuggestedDoi};
 use crate::text::token_coverage;
 use futures::stream::{self, StreamExt};
 use std::collections::HashSet;
+use std::future::Future;
 
 const SUGGEST_THRESHOLD: f64 = 0.8;
 
-/// Cache-first resolution: returns an `EntryOutcome` for a single DOI.
+/// Cache-first fetch from one agency: returns the JSON and whether it was a cache
+/// hit. The `fetch` future is only awaited on a cache miss (futures are lazy), so
+/// a hit makes no network call.
+async fn fetch_cached(
+    cache: &(impl DoiCache + Sync),
+    source: Source,
+    key: &crate::doi::Doi,
+    fetch: impl Future<Output = Result<String, LookupError>>,
+) -> Result<(String, bool), LookupError> {
+    if let Some(json) = cache.get(source, key) {
+        return Ok((json, true));
+    }
+    let json = fetch.await?;
+    cache.put(source, key, &json);
+    Ok((json, false))
+}
+
+/// Build a Resolved outcome, comparing the reference text against `meta` (unless
+/// the text is too sparse to compare).
+fn resolved_outcome(
+    doi: &str,
+    raw_text: &str,
+    meta: &Metadata,
+    from_cache: bool,
+    source: Source,
+) -> EntryOutcome {
+    let discrepancies = if crate::text::is_comparable(raw_text) {
+        compare(raw_text, meta)
+    } else {
+        Vec::new()
+    };
+    EntryOutcome::Resolved {
+        doi: doi.to_string(),
+        discrepancies,
+        from_cache,
+        source,
+    }
+}
+
+fn unresolved_outcome(doi: &str, network_error: bool) -> EntryOutcome {
+    EntryOutcome::Unresolved {
+        doi: doi.to_string(),
+        network_error,
+    }
+}
+
+/// Turn a bibliographic-search hit into a suggestion: seed `source`'s DOI cache
+/// with the matched record (so a later direct resolve is a cache hit, regardless
+/// of the threshold), and return a `SuggestedDoi` when the title coverage meets
+/// the suggestion threshold.
+fn suggestion_from_hit(
+    hit: SearchHit,
+    raw_text: &str,
+    source: Source,
+    cache: &impl DoiCache,
+) -> Option<SuggestedDoi> {
+    cache.put(source, &crate::doi::Doi::new(&hit.doi), &hit.record);
+    let cov = hit
+        .metadata
+        .title
+        .as_deref()
+        .map(|t| token_coverage(raw_text, t))
+        .unwrap_or(0.0);
+    (cov >= SUGGEST_THRESHOLD).then(|| SuggestedDoi {
+        doi: hit.doi,
+        // Clamp to the documented 0-100 range of `title_match`.
+        title_match: (cov * 100.0).round().clamp(0.0, 100.0) as u8,
+        source,
+    })
+}
+
+/// Cache-first resolution for a single DOI: Crossref first, then DataCite when
+/// Crossref returns a definitive 404 (the DOI is registered with another agency).
+/// A Crossref *network* error stays transient (retry later) and does not fall
+/// through, since the DOI may well be a Crossref one we simply could not fetch.
 /// Used by both `run` and `recheck_failures` to keep resolution consistent.
 async fn resolve_doi_outcome(
     doi: &str,
     raw_text: &str,
     client: &CrossrefClient,
-    cache: &(impl crate::cache::DoiCache + Sync),
+    datacite: &DataCiteClient,
+    cache: &(impl DoiCache + Sync),
 ) -> EntryOutcome {
     let key = crate::doi::Doi::new(doi);
-    let (json, from_cache) = match cache.get(Source::Crossref, &key) {
-        Some(j) => (Ok(j), true),
-        None => {
-            let fetched = client.resolve_json(doi).await;
-            if let Ok(ref j) = fetched {
-                cache.put(Source::Crossref, &key, j);
-            }
-            (fetched, false)
-        }
-    };
-    match json {
-        Ok(body) => {
+    match fetch_cached(cache, Source::Crossref, &key, client.resolve_json(doi)).await {
+        Ok((body, from_cache)) => {
             let meta = crate::crossref::metadata_from_json(&body);
-            let discrepancies = if crate::text::is_comparable(raw_text) {
-                compare(raw_text, &meta)
-            } else {
-                Vec::new()
-            };
-            EntryOutcome::Resolved {
-                doi: doi.to_string(),
-                discrepancies,
-                from_cache,
-                source: Source::Crossref,
-            }
+            return resolved_outcome(doi, raw_text, &meta, from_cache, Source::Crossref);
         }
-        Err(LookupError::NotFound) => EntryOutcome::Unresolved {
-            doi: doi.to_string(),
-            network_error: false,
-        },
-        Err(LookupError::Network(_)) => EntryOutcome::Unresolved {
-            doi: doi.to_string(),
-            network_error: true,
-        },
+        Err(LookupError::Network(_)) => return unresolved_outcome(doi, true),
+        Err(LookupError::NotFound) => {}
+    }
+    match fetch_cached(cache, Source::DataCite, &key, datacite.resolve_json(doi)).await {
+        Ok((body, from_cache)) => {
+            let meta = crate::datacite::metadata_from_json(&body);
+            resolved_outcome(doi, raw_text, &meta, from_cache, Source::DataCite)
+        }
+        Err(LookupError::Network(_)) => unresolved_outcome(doi, true),
+        Err(LookupError::NotFound) => unresolved_outcome(doi, false),
     }
 }
 
@@ -59,10 +118,11 @@ async fn resolve_doi_outcome(
 async fn outcome_for_entry(
     entry: &crate::model::ReferenceEntry,
     client: &CrossrefClient,
+    datacite: &DataCiteClient,
     cache: &(impl DoiCache + SearchCache + Sync),
 ) -> EntryOutcome {
     match &entry.doi {
-        Some(doi) => resolve_doi_outcome(doi, &entry.raw_text, client, cache).await,
+        Some(doi) => resolve_doi_outcome(doi, &entry.raw_text, client, datacite, cache).await,
         None => {
             // Search is keyed by the reference text. Reuse a cached suggestion
             // before hitting the network.
@@ -74,45 +134,37 @@ async fn outcome_for_entry(
                     from_cache: true,
                 };
             }
-            let suggested = match client.search(&entry.raw_text).await {
+            // Crossref first; if it offers no suggestion (no good match, no hit,
+            // or a search failure), fall back to DataCite. Each agency's hit seeds
+            // its own DOI cache via `suggestion_from_hit`.
+            let crossref_suggestion = match client.search(&entry.raw_text).await {
                 Ok(Some(hit)) if !hit.doi.is_empty() => {
-                    // Seed the DOI cache with the matched work's record so a
-                    // later direct resolve of this DOI is a cache hit. Done
-                    // regardless of the suggestion threshold: the record is the
-                    // valid Crossref entry for that DOI either way.
-                    cache.put(
-                        Source::Crossref,
-                        &crate::doi::Doi::new(&hit.doi),
-                        &hit.record,
-                    );
-                    let cov = hit
-                        .metadata
-                        .title
-                        .as_deref()
-                        .map(|t| token_coverage(&entry.raw_text, t))
-                        .unwrap_or(0.0);
-                    if cov >= SUGGEST_THRESHOLD {
-                        let suggested = SuggestedDoi {
-                            doi: hit.doi,
-                            // Clamp to the documented 0-100 range of `title_match`.
-                            title_match: (cov * 100.0).round().clamp(0.0, 100.0) as u8,
-                            source: Source::Crossref,
-                        };
-                        if let Ok(json) = serde_json::to_string(&suggested) {
-                            cache.search_put(&key, &json);
-                        }
-                        Some(suggested)
-                    } else {
-                        None
-                    }
+                    suggestion_from_hit(hit, &entry.raw_text, Source::Crossref, cache)
                 }
-                // No usable suggestion: an empty-DOI hit, no hit, or a search
-                // failure (treated as "no suggestion available").
                 Ok(Some(_))
                 | Ok(None)
                 | Err(LookupError::NotFound)
                 | Err(LookupError::Network(_)) => None,
             };
+            let suggested = match crossref_suggestion {
+                Some(s) => Some(s),
+                None => match datacite.search(&entry.raw_text).await {
+                    Ok(Some(hit)) if !hit.doi.is_empty() => {
+                        suggestion_from_hit(hit, &entry.raw_text, Source::DataCite, cache)
+                    }
+                    Ok(Some(_))
+                    | Ok(None)
+                    | Err(LookupError::NotFound)
+                    | Err(LookupError::Network(_)) => None,
+                },
+            };
+            // Cache only a positive suggestion (>=80% match); a near-miss is left
+            // uncached so a later run can try again.
+            if let Some(s) = &suggested
+                && let Ok(json) = serde_json::to_string(s)
+            {
+                cache.search_put(&key, &json);
+            }
             EntryOutcome::NoDoi {
                 suggested,
                 from_cache: false,
@@ -149,6 +201,7 @@ fn tally(outcome: &EntryOutcome, cached: &mut usize, fetched: &mut usize) {
 pub async fn recheck_failures(
     mut result: CheckResult,
     client: &CrossrefClient,
+    datacite: &DataCiteClient,
     cache: &(impl crate::cache::DoiCache + Sync),
     concurrency: usize,
     mut progress: impl FnMut(Progress),
@@ -191,7 +244,10 @@ pub async fn recheck_failures(
     });
 
     let mut tasks = stream::iter(jobs.into_iter().map(|(i, doi, raw_text)| async move {
-        (i, resolve_doi_outcome(&doi, &raw_text, client, cache).await)
+        (
+            i,
+            resolve_doi_outcome(&doi, &raw_text, client, datacite, cache).await,
+        )
     }))
     .buffer_unordered(concurrency.max(1));
     while let Some((i, outcome)) = tasks.next().await {
@@ -219,6 +275,7 @@ pub async fn run(
     run_at: String,
     text: &str,
     client: &CrossrefClient,
+    datacite: &DataCiteClient,
     cache: &(impl DoiCache + SearchCache + Sync),
     concurrency: usize,
     mut progress: impl FnMut(Progress),
@@ -250,7 +307,7 @@ pub async fn run(
     for indices in [first_pass, dup_pass] {
         let mut tasks = stream::iter(indices.into_iter().map(|i| {
             let entry = entries[i].clone();
-            async move { (i, outcome_for_entry(&entry, client, cache).await) }
+            async move { (i, outcome_for_entry(&entry, client, datacite, cache).await) }
         }))
         .buffer_unordered(limit);
         while let Some((i, outcome)) = tasks.next().await {
@@ -315,6 +372,7 @@ mod tests {
             .mount(&server)
             .await;
         let client = CrossrefClient::with_base("", server.uri());
+        let datacite = DataCiteClient::with_base("", server.uri());
         let cache = MemoryCache::default();
 
         let text = "References\n[1] Smith J (2020). A Study of Widgets. 10.1000/abc";
@@ -325,6 +383,7 @@ mod tests {
             "now".into(),
             text,
             &client,
+            &datacite,
             &cache,
             5,
             |p| updates.push(p.done),
@@ -338,6 +397,93 @@ mod tests {
             EntryOutcome::Resolved { .. }
         ));
         assert_eq!(updates, vec![1]);
+    }
+
+    #[tokio::test]
+    async fn falls_back_to_datacite_when_crossref_404s() {
+        // Crossref does not have the DOI; DataCite does (e.g. a Zenodo dataset).
+        let crossref = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&crossref)
+            .await;
+        let datacite_server = MockServer::start().await;
+        let body = serde_json::json!({
+            "data": {"attributes": {
+                "doi": "10.5281/zenodo.99",
+                "titles": [{"title": "A Dataset"}],
+                "creators": [{"name": "Lee, K", "familyName": "Lee", "nameType": "Personal"}],
+                "publicationYear": 2021
+            }}
+        });
+        Mock::given(method("GET"))
+            .and(path_regex(r"/dois/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&datacite_server)
+            .await;
+        let client = CrossrefClient::with_base("", crossref.uri());
+        let datacite = DataCiteClient::with_base("", datacite_server.uri());
+        let cache = MemoryCache::default();
+
+        let text = "References\nLee, K. (2021). A Dataset. https://doi.org/10.5281/zenodo.99";
+        let result = run(
+            "a.pdf".into(),
+            "fp".into(),
+            "now".into(),
+            text,
+            &client,
+            &datacite,
+            &cache,
+            5,
+            |_| {},
+        )
+        .await;
+        match &result.entries[0].outcome {
+            EntryOutcome::Resolved { source, doi, .. } => {
+                assert_eq!(*source, Source::DataCite);
+                assert_eq!(doi, "10.5281/zenodo.99");
+            }
+            other => panic!("expected DataCite-resolved, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn unresolved_when_neither_agency_has_the_doi() {
+        // Both agencies 404: the DOI is genuinely unresolved (not a network error).
+        let crossref = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&crossref)
+            .await;
+        let datacite_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&datacite_server)
+            .await;
+        let client = CrossrefClient::with_base("", crossref.uri());
+        let datacite = DataCiteClient::with_base("", datacite_server.uri());
+        let cache = MemoryCache::default();
+
+        let text = "References\nGhost, A. (2099). Nonexistent. https://doi.org/10.9999/nope";
+        let result = run(
+            "a.pdf".into(),
+            "fp".into(),
+            "now".into(),
+            text,
+            &client,
+            &datacite,
+            &cache,
+            5,
+            |_| {},
+        )
+        .await;
+        assert!(matches!(
+            result.entries[0].outcome,
+            EntryOutcome::Unresolved {
+                network_error: false,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
@@ -355,6 +501,7 @@ mod tests {
             .mount(&server)
             .await;
         let client = CrossrefClient::with_base("", server.uri());
+        let datacite = DataCiteClient::with_base("", server.uri());
         let cache = MemoryCache::default();
 
         let text = "References\nSmith J. A Study of Widgets. Journal of Widgets.";
@@ -364,6 +511,7 @@ mod tests {
             "now".into(),
             text,
             &client,
+            &datacite,
             &cache,
             5,
             |_| {},
@@ -382,6 +530,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn suggests_datacite_doi_when_crossref_has_none() {
+        // Crossref search finds nothing; DataCite has a matching record.
+        let crossref = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"message":{"items":[]}})),
+            )
+            .mount(&crossref)
+            .await;
+        let datacite_server = MockServer::start().await;
+        let body = serde_json::json!({
+            "data": [{"attributes": {
+                "doi": "10.5281/zenodo.7",
+                "titles": [{"title": "A Study of Widgets"}],
+                "creators": [{"name": "Smith, J", "familyName": "Smith", "nameType": "Personal"}],
+                "publicationYear": 2020
+            }}]
+        });
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&datacite_server)
+            .await;
+        let client = CrossrefClient::with_base("", crossref.uri());
+        let datacite = DataCiteClient::with_base("", datacite_server.uri());
+        let cache = MemoryCache::default();
+
+        let text = "References\nSmith J. A Study of Widgets. Journal of Widgets.";
+        let result = run(
+            "a.pdf".into(),
+            "fp".into(),
+            "now".into(),
+            text,
+            &client,
+            &datacite,
+            &cache,
+            5,
+            |_| {},
+        )
+        .await;
+        match &result.entries[0].outcome {
+            EntryOutcome::NoDoi {
+                suggested: Some(s), ..
+            } => {
+                assert_eq!(s.source, Source::DataCite);
+                assert_eq!(s.doi, "10.5281/zenodo.7");
+                assert!(s.title_match >= 80);
+            }
+            other => panic!("expected a DataCite suggestion, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn search_suggestion_is_cached_and_reused() {
         let server = MockServer::start().await;
         let body = serde_json::json!({
@@ -395,6 +596,7 @@ mod tests {
             .mount(&server)
             .await;
         let client = CrossrefClient::with_base("", server.uri());
+        let datacite = DataCiteClient::with_base("", server.uri());
         let cache = MemoryCache::default();
         let text = "References\nSmith J. A Study of Widgets. Journal of Widgets.";
 
@@ -404,6 +606,7 @@ mod tests {
             "now".into(),
             text,
             &client,
+            &datacite,
             &cache,
             5,
             |_| {},
@@ -425,6 +628,7 @@ mod tests {
             "now".into(),
             text,
             &client,
+            &datacite,
             &cache,
             5,
             |_| {},
@@ -462,6 +666,7 @@ mod tests {
             .mount(&server)
             .await;
         let client = CrossrefClient::with_base("", server.uri());
+        let datacite = DataCiteClient::with_base("", server.uri());
         let cache = MemoryCache::default();
         let text = "References\nSmith J. A Study of Widgets. Journal of Widgets.";
         let _ = run(
@@ -470,6 +675,7 @@ mod tests {
             "now".into(),
             text,
             &client,
+            &datacite,
             &cache,
             5,
             |_| {},
@@ -501,6 +707,7 @@ mod tests {
             .mount(&server)
             .await;
         let client = CrossrefClient::with_base("", server.uri());
+        let datacite = DataCiteClient::with_base("", server.uri());
         let cache = MemoryCache::default();
 
         // No "References" heading: the fallback window must carry the entry text,
@@ -512,6 +719,7 @@ mod tests {
             "now".into(),
             text,
             &client,
+            &datacite,
             &cache,
             5,
             |_| {},
@@ -538,6 +746,7 @@ mod tests {
             &serde_json::json!({"message":{"title":["Cached"],"DOI":"10.1000/abc"}}).to_string(),
         );
         let client = CrossrefClient::with_base("", server.uri());
+        let datacite = DataCiteClient::with_base("", server.uri());
         let text = "References\n[1] Smith J (2020). A Study of Widgets. 10.1000/abc";
         let result = run(
             "a.pdf".into(),
@@ -545,6 +754,7 @@ mod tests {
             "now".into(),
             text,
             &client,
+            &datacite,
             &cache,
             5,
             |_| {},
@@ -567,6 +777,7 @@ mod tests {
             .mount(&server)
             .await;
         let client = CrossrefClient::with_base("", server.uri());
+        let datacite = DataCiteClient::with_base("", server.uri());
         let cache = MemoryCache::default();
         let text = "References\n[1] Smith J (2020). A Study of Widgets. 10.1000/abc";
         let _ = run(
@@ -575,6 +786,7 @@ mod tests {
             "now".into(),
             text,
             &client,
+            &datacite,
             &cache,
             5,
             |_| {},
@@ -596,6 +808,7 @@ mod tests {
             .mount(&server)
             .await;
         let client = CrossrefClient::with_base("", server.uri());
+        let datacite = DataCiteClient::with_base("", server.uri());
         let cache = MemoryCache::default();
         let text = "References\n[1] Smith J (2020). A Study of Widgets. 10.1000/abc";
         let result = run(
@@ -604,6 +817,7 @@ mod tests {
             "now".into(),
             text,
             &client,
+            &datacite,
             &cache,
             5,
             |_| {},
@@ -631,6 +845,7 @@ mod tests {
             .mount(&server)
             .await;
         let client = CrossrefClient::with_base("", server.uri());
+        let datacite = DataCiteClient::with_base("", server.uri());
         let cache = MemoryCache::default();
 
         let result = CheckResult {
@@ -668,7 +883,7 @@ mod tests {
             ],
         };
 
-        let updated = recheck_failures(result, &client, &cache, 5, |_| {}).await;
+        let updated = recheck_failures(result, &client, &datacite, &cache, 5, |_| {}).await;
         // The transient failure is now resolved.
         assert!(matches!(
             updated.entries[0].outcome,
@@ -693,6 +908,7 @@ mod tests {
             .mount(&server)
             .await;
         let client = CrossrefClient::with_base("", server.uri());
+        let datacite = DataCiteClient::with_base("", server.uri());
         let cache = MemoryCache::default();
         let text = "References\n\
 [1] Smith J (2020). A Study of Widgets. 10.1000/dup\n\
@@ -703,6 +919,7 @@ mod tests {
             "now".into(),
             text,
             &client,
+            &datacite,
             &cache,
             5,
             |_| {},
@@ -729,6 +946,7 @@ mod tests {
             .mount(&server)
             .await;
         let client = CrossrefClient::with_base("", server.uri());
+        let datacite = DataCiteClient::with_base("", server.uri());
         let cache = MemoryCache::default();
 
         // A reference whose raw text contains a ChatGPT tracking parameter.
@@ -740,6 +958,7 @@ mod tests {
             "now".into(),
             text,
             &client,
+            &datacite,
             &cache,
             5,
             |_| {},
