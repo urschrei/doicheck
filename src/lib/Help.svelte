@@ -33,8 +33,8 @@
       <h3>Checking a document</h3>
       <ul>
         <li>Drag a PDF or <code>.docx</code> onto the window, or use <b>Open</b>.</li>
-        <li>The bibliography is detected, its DOIs are checked against Crossref, and the
-          returned metadata is compared with each reference.</li>
+        <li>The bibliography is detected, its DOIs are checked against Crossref and
+          DataCite, and the returned metadata is compared with each reference.</li>
         <li>A document you have checked before opens straight to its stored report;
           the sidebar lists everything you have checked.</li>
       </ul>
@@ -51,7 +51,7 @@
 
       <h3>Mismatches and false positives</h3>
       <ul>
-        <li>A flagged field shows what Crossref holds; if it is wrong, use
+        <li>A flagged field shows what Crossref or DataCite holds; if it is wrong, use
           <b>mark false positive</b>. Dismissals are remembered for that document and
           can be undone.</li>
       </ul>
@@ -59,7 +59,7 @@
       <h3>Re-checking, cache and offline</h3>
       <ul>
         <li>Resolved DOIs are cached locally and shared across documents, so each DOI is
-          fetched from Crossref once; the report shows how many came from the cache.</li>
+          fetched once; the report shows how many came from the cache.</li>
         <li><b>Re-check failures</b> retries only the entries that could not be checked
           (e.g. after losing connectivity); <b>Re-check entire doc</b> re-runs the whole
           document.</li>
@@ -76,7 +76,7 @@
       </ul>
     {:else}
       <h3>DOI Checker{version ? ` ${version}` : ""}</h3>
-      <p>Check the DOIs in a document's bibliography against Crossref.</p>
+      <p>Check the DOIs in a document's bibliography against Crossref and DataCite.</p>
 
       <p class="field"><span>Author</span> Stephan Hügel</p>
       <p class="field"><span>Affiliation</span> Department of Geography, Trinity College Dublin</p>
@@ -88,7 +88,8 @@
         <button class="link" onclick={() => open("https://blueoakcouncil.org/license/1.0.0")}>Blue Oak Model License 1.0.0</button></p>
 
       <p class="meta">Built with Tauri, Svelte, and Rust. Bibliographic data from
-        <button class="link" onclick={() => open("https://www.crossref.org")}>Crossref</button>.</p>
+        <button class="link" onclick={() => open("https://www.crossref.org")}>Crossref</button>
+        and <button class="link" onclick={() => open("https://datacite.org")}>DataCite</button>.</p>
       <p class="meta">© 2026 Stephan Hügel. Provided as is, without warranty.</p>
     {/if}
   </div>
