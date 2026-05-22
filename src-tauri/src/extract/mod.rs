@@ -22,7 +22,9 @@ pub fn extract_text(bytes: &[u8], kind: FileKind) -> Result<String, ExtractError
 
 /// Heuristic: treat near-empty extraction as "no usable text".
 pub fn has_usable_text(text: &str) -> bool {
-    text.chars().filter(|c| c.is_alphanumeric()).count() >= 20
+    /// Minimum alphanumeric characters for an extraction to count as usable.
+    const MIN_USABLE_ALNUM: usize = 20;
+    text.chars().filter(|c| c.is_alphanumeric()).count() >= MIN_USABLE_ALNUM
 }
 
 #[cfg(test)]

@@ -113,6 +113,10 @@ impl CrossrefClient {
         } else {
             format!("doicheck/0.1 (mailto:{})", email.trim())
         };
+        // Building the client only fails if the TLS backend cannot initialise,
+        // which is an unrecoverable environment failure; there is no infallible
+        // reqwest constructor, so panic here rather than thread a Result through
+        // every caller.
         let http = reqwest::Client::builder()
             .user_agent(ua)
             .build()
@@ -220,19 +224,26 @@ impl CrossrefClient {
             if w.doi.is_empty() {
                 return None;
             }
+            let metadata = w.to_metadata();
             Some(SearchHit {
-                metadata: w.to_metadata(),
                 doi: w.doi,
+                metadata,
             })
         }))
     }
 }
 
-/// Parse a Crossref `/works/{doi}` response body into comparison metadata.
+/// Parse a Crossref `/works/{doi}` response body into comparison metadata. A
+/// parse failure (corrupt cache entry or an API contract change) is logged and
+/// treated as empty metadata.
 pub fn metadata_from_json(body: &str) -> Metadata {
-    serde_json::from_str::<WorkMessage>(body)
-        .map(|m| m.message.to_metadata())
-        .unwrap_or_default()
+    match serde_json::from_str::<WorkMessage>(body) {
+        Ok(m) => m.message.to_metadata(),
+        Err(e) => {
+            log::warn!("crossref: failed to parse metadata JSON ({e}); treating as empty");
+            Metadata::default()
+        }
+    }
 }
 
 #[cfg(test)]

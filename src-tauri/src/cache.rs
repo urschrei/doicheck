@@ -38,11 +38,31 @@ pub struct StoreCache<'a> {
 
 impl DoiCache for StoreCache<'_> {
     fn get(&self, doi: &str) -> Option<String> {
-        self.store.lock().ok()?.cache_get(doi).ok().flatten()
+        let store = match self.store.lock() {
+            Ok(store) => store,
+            Err(e) => {
+                log::warn!("crossref cache: store lock poisoned on get: {e}");
+                return None;
+            }
+        };
+        match store.cache_get(doi) {
+            Ok(hit) => hit,
+            Err(e) => {
+                log::warn!("crossref cache: read failed for {doi}: {e}");
+                None
+            }
+        }
     }
     fn put(&self, doi: &str, json: &str) {
-        if let Ok(s) = self.store.lock() {
-            let _ = s.cache_put(doi, json);
+        let store = match self.store.lock() {
+            Ok(store) => store,
+            Err(e) => {
+                log::warn!("crossref cache: store lock poisoned on put: {e}");
+                return;
+            }
+        };
+        if let Err(e) = store.cache_put(doi, json) {
+            log::warn!("crossref cache: write failed for {doi}: {e}");
         }
     }
 }
