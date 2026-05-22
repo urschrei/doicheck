@@ -108,6 +108,11 @@ impl Store {
                 json TEXT NOT NULL,
                 fetched_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS datacite_cache (
+                doi TEXT PRIMARY KEY,
+                json TEXT NOT NULL,
+                fetched_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS crossref_search_cache (
                 query TEXT PRIMARY KEY,
                 json TEXT NOT NULL,
@@ -218,6 +223,32 @@ impl Store {
         let now = chrono::Utc::now().to_rfc3339();
         self.conn.execute(
             "INSERT INTO crossref_cache(doi, json, fetched_at) VALUES(?1, ?2, ?3)
+             ON CONFLICT(doi) DO UPDATE SET json = excluded.json, fetched_at = excluded.fetched_at",
+            params![doi, json, now],
+        )?;
+        Ok(())
+    }
+
+    /// Cached DataCite JSON for a DOI, if present and within the TTL. Separate
+    /// table from the Crossref cache: the two agencies' JSON shapes differ.
+    pub fn datacite_cache_get(&self, doi: &str) -> Result<Option<String>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT json, fetched_at FROM datacite_cache WHERE doi = ?1")?;
+        let mut rows = stmt.query(params![doi])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        let json: String = row.get(0)?;
+        let fetched_at: String = row.get(1)?;
+        Ok(fresh(&fetched_at).then_some(json))
+    }
+
+    /// Store (or replace) the DataCite JSON for a DOI.
+    pub fn datacite_cache_put(&self, doi: &str, json: &str) -> Result<(), StoreError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO datacite_cache(doi, json, fetched_at) VALUES(?1, ?2, ?3)
              ON CONFLICT(doi) DO UPDATE SET json = excluded.json, fetched_at = excluded.fetched_at",
             params![doi, json, now],
         )?;
@@ -520,6 +551,7 @@ mod tests {
                         dismissed: false,
                     }],
                     from_cache: false,
+                    source: Default::default(),
                 },
                 llm_source: None,
             }],
@@ -592,6 +624,23 @@ mod tests {
             store.cache_get("10.1/x").unwrap().as_deref(),
             Some("{\"v\":2}")
         );
+    }
+
+    #[test]
+    fn datacite_cache_round_trips_and_is_separate_from_crossref() {
+        let store = Store::open_in_memory().unwrap();
+        store.cache_put("10.1/x", "crossref").unwrap();
+        store.datacite_cache_put("10.1/x", "datacite").unwrap();
+        // Same DOI, different agency caches: each keeps its own JSON.
+        assert_eq!(
+            store.cache_get("10.1/x").unwrap().as_deref(),
+            Some("crossref")
+        );
+        assert_eq!(
+            store.datacite_cache_get("10.1/x").unwrap().as_deref(),
+            Some("datacite")
+        );
+        assert_eq!(store.datacite_cache_get("10.1/missing").unwrap(), None);
     }
 
     #[test]
