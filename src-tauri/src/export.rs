@@ -1,10 +1,11 @@
 //! Machine-readable exports of a CheckResult: full JSON and a flat CSV.
 
 use crate::model::{CheckResult, EntryOutcome};
+use std::fmt::Write;
 
 /// Lossless JSON of the whole result.
-pub fn to_json(result: &CheckResult) -> String {
-    serde_json::to_string_pretty(result).unwrap_or_default()
+pub fn to_json(result: &CheckResult) -> Result<String, serde_json::Error> {
+    serde_json::to_string_pretty(result)
 }
 
 /// One row per entry: ordinal, reference_text, doi, status, unmatched fields, suggested doi, llm_source.
@@ -12,36 +13,32 @@ pub fn to_csv(result: &CheckResult) -> String {
     let mut out = String::from(
         "ordinal,reference_text,doi,status,unmatched_fields,suggested_doi,llm_source\n",
     );
-    for e in &result.entries {
-        let (status, unmatched, suggested) = match &e.outcome {
+    for ce in &result.entries {
+        let (status, unmatched, suggested): (&str, String, String) = match &ce.outcome {
             EntryOutcome::Resolved { discrepancies, .. } => {
-                let active: Vec<_> = discrepancies.iter().filter(|d| !d.dismissed).collect();
-                if active.is_empty() {
-                    ("clean".to_string(), String::new(), String::new())
+                let unmatched = discrepancies
+                    .iter()
+                    .filter(|d| !d.dismissed)
+                    .map(|d| d.field.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                let status = if unmatched.is_empty() {
+                    "clean"
                 } else {
-                    (
-                        "mismatch".to_string(),
-                        active
-                            .iter()
-                            .map(|d| d.field.as_str())
-                            .collect::<Vec<_>>()
-                            .join("; "),
-                        String::new(),
-                    )
-                }
+                    "mismatch"
+                };
+                (status, unmatched, String::new())
             }
-            EntryOutcome::Unresolved { network_error, .. } => (
-                if *network_error {
+            EntryOutcome::Unresolved { network_error, .. } => {
+                let status = if *network_error {
                     "retry_needed"
                 } else {
                     "not_found"
-                }
-                .to_string(),
-                String::new(),
-                String::new(),
-            ),
+                };
+                (status, String::new(), String::new())
+            }
             EntryOutcome::NoDoi { suggested } => (
-                "no_doi".to_string(),
+                "no_doi",
                 String::new(),
                 suggested
                     .as_ref()
@@ -49,28 +46,34 @@ pub fn to_csv(result: &CheckResult) -> String {
                     .unwrap_or_default(),
             ),
         };
-        let llm = e.llm_source.as_deref().unwrap_or("");
-        out.push_str(&format!(
-            "{},{},{},{},{},{},{}\n",
-            e.entry.ordinal,
-            csv_field(&e.entry.raw_text),
-            csv_field(e.entry.doi.as_deref().unwrap_or("")),
+        let llm = ce.llm_source.as_deref().unwrap_or("");
+        let _ = writeln!(
+            out,
+            "{},{},{},{},{},{},{}",
+            ce.entry.ordinal,
+            csv_field(&ce.entry.raw_text),
+            csv_field(ce.entry.doi.as_deref().unwrap_or("")),
             status,
             csv_field(&unmatched),
             csv_field(&suggested),
             csv_field(llm),
-        ));
+        );
     }
     out
 }
 
-/// Quote a CSV field if it contains a comma, quote, newline, or carriage return.
+/// Render a CSV field. Quotes per RFC 4180 (comma, quote, CR, LF) and defends
+/// against spreadsheet formula injection (CWE-1236): a field beginning with
+/// `=`, `+`, `-`, `@`, tab, or CR is interpreted as a formula by Excel /
+/// LibreOffice / Sheets, so it is prefixed with an apostrophe to force text.
 fn csv_field(s: &str) -> String {
-    if s.contains([',', '"', '\n', '\r']) {
-        format!("\"{}\"", s.replace('"', "\"\""))
-    } else {
-        s.to_string()
+    let needs_formula_guard = s.starts_with(['=', '+', '-', '@', '\t', '\r']);
+    if !needs_formula_guard && !s.contains([',', '"', '\n', '\r']) {
+        return s.to_string();
     }
+    let escaped = s.replace('"', "\"\"");
+    let prefix = if needs_formula_guard { "'" } else { "" };
+    format!("\"{prefix}{escaped}\"")
 }
 
 #[cfg(test)]
@@ -192,6 +195,16 @@ mod tests {
     }
 
     #[test]
+    fn csv_field_guards_against_formula_injection() {
+        assert_eq!(csv_field("=1+1"), "\"'=1+1\"");
+        assert_eq!(csv_field("+44"), "\"'+44\"");
+        assert_eq!(csv_field("-5"), "\"'-5\"");
+        assert_eq!(csv_field("@cmd"), "\"'@cmd\"");
+        // A field starting with a safe character is untouched.
+        assert_eq!(csv_field("Smith"), "Smith");
+    }
+
+    #[test]
     fn csv_quotes_reference_text_with_commas() {
         let r = CheckResult {
             filename: "x.pdf".into(),
@@ -221,7 +234,7 @@ mod tests {
 
     #[test]
     fn json_round_trips() {
-        let json = to_json(&result());
+        let json = to_json(&result()).unwrap();
         let back: CheckResult = serde_json::from_str(&json).unwrap();
         assert_eq!(back, result());
     }

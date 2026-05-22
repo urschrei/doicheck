@@ -201,7 +201,7 @@ pub fn export_report(
                 .latest_result(&fingerprint)
                 .map_err(map_err)?
                 .ok_or_else(|| "no result stored for this document".to_string())?;
-            crate::export::to_json(&r)
+            crate::export::to_json(&r).map_err(|e| e.to_string())?
         }
         "csv" => {
             let r = store
