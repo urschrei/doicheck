@@ -36,10 +36,7 @@ async fn resolve_maps_404_to_not_found() {
         .await;
     let client = CrossrefClient::with_base("", server.uri());
     let err = client.resolve("10.1000/missing").await.unwrap_err();
-    assert!(matches!(
-        err,
-        doicheck_lib::crossref::CrossrefError::NotFound
-    ));
+    assert!(matches!(err, doicheck_lib::crossref::LookupError::NotFound));
 }
 
 #[tokio::test]
