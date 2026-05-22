@@ -46,9 +46,13 @@ fn xml_to_text(xml: &str) -> String {
                     }
                 }
             }
-            // Best-effort: on EOF or any parse error, stop and return the text
+            Ok(Event::Eof) => break,
+            // Best-effort: on a parse error, log it and stop, returning the text
             // gathered so far rather than failing the whole extraction.
-            Ok(Event::Eof) | Err(_) => break,
+            Err(e) => {
+                log::warn!("docx: stopped XML parse early ({e}); returning partial text");
+                break;
+            }
             _ => {}
         }
         buf.clear();

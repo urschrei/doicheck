@@ -24,16 +24,23 @@ type Bindings = Box<dyn PdfiumLibraryBindings>;
 static PDFIUM_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 /// Configure where to find the PDFium library (the app resource directory).
+/// Call once at startup, before any extraction; later calls are ignored.
 pub fn set_library_dir(dir: PathBuf) {
-    let _ = PDFIUM_DIR.set(dir);
+    if PDFIUM_DIR.set(dir).is_err() {
+        log::warn!("pdf: PDFIUM_DIR already set; ignoring later set_library_dir call");
+    }
 }
 
 pub fn extract(bytes: &[u8]) -> Result<String, PdfError> {
     match extract_with_pdfium(bytes) {
         Ok(text) => Ok(text),
-        Err(e) => {
-            eprintln!("PDFium extraction unavailable or failed ({e}); using pdf-extract fallback");
-            pdf_extract::extract_text_from_mem(bytes).map_err(|e| PdfError::Extract(e.to_string()))
+        Err(pdfium_err) => {
+            log::warn!(
+                "pdf: PDFium extraction unavailable or failed ({pdfium_err}); using pdf-extract fallback"
+            );
+            pdf_extract::extract_text_from_mem(bytes).map_err(|fallback_err| {
+                PdfError::Extract(format!("pdfium: {pdfium_err}; pdf-extract: {fallback_err}"))
+            })
         }
     }
 }
@@ -66,11 +73,16 @@ fn bind_pdfium() -> Result<Bindings, String> {
     {
         dirs.push(parent);
     }
+    let mut errors = Vec::new();
     for dir in dirs {
         let name = Pdfium::pdfium_platform_library_name_at_path(&dir);
-        if let Ok(bindings) = Pdfium::bind_to_library(name) {
-            return Ok(bindings);
+        match Pdfium::bind_to_library(name) {
+            Ok(bindings) => return Ok(bindings),
+            Err(e) => errors.push(format!("{}: {e}", dir.display())),
         }
     }
-    Pdfium::bind_to_system_library().map_err(|e| e.to_string())
+    Pdfium::bind_to_system_library().map_err(|e| {
+        errors.push(format!("system library: {e}"));
+        format!("could not bind PDFium ({})", errors.join("; "))
+    })
 }
