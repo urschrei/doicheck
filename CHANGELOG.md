@@ -12,6 +12,12 @@ omitted.
   text report. A DOI is only marked unresolved after both agencies are checked,
   so the previous Crossref-only wording was misleading. The help text now also
   describes checks against both agencies and credits DataCite as a data source.
+- Treat a reference that has no DOI but matches a Crossref or DataCite
+  bibliographic search at full title coverage as a verified entry: it is
+  compared on author, year, and container like a cited DOI (clean when all
+  match, a flagged mismatch otherwise) and annotated "No DOI: matched via
+  bibliography search on [source]". Such entries are reported among the
+  missing-DOI references and counted separately from cited-DOI lookups.
 
 ## [0.5.0] - 2026-05-22
 

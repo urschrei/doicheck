@@ -552,6 +552,7 @@ mod tests {
                     }],
                     from_cache: false,
                     source: Default::default(),
+                    via_search: false,
                 },
                 llm_source: None,
             }],
@@ -828,6 +829,63 @@ mod tests {
         // Reopen: migrate must run again without error and data persists.
         let s = Store::open(&path).unwrap();
         assert!(s.latest_result("sha256:aaa").unwrap().is_some());
+    }
+
+    fn status_for_single_entry(entry: CheckedEntry) -> DocumentSummary {
+        let mut store = Store::open_in_memory().unwrap();
+        // Reuse the canonical test document and replace only its entry, so the
+        // boilerplate fields stay consistent with the other status tests.
+        let mut result = sample();
+        result.entries = vec![entry];
+        store.save_check(&result, "pdf", "T").unwrap();
+        store.list_documents().unwrap().pop().unwrap()
+    }
+
+    #[test]
+    fn status_clean_for_clean_via_search_match() {
+        let entry = CheckedEntry {
+            entry: ReferenceEntry {
+                ordinal: 1,
+                raw_text: "Clean via search".into(),
+                doi: None,
+            },
+            outcome: EntryOutcome::Resolved {
+                doi: "10.1/clean".into(),
+                discrepancies: vec![],
+                from_cache: false,
+                source: Default::default(),
+                via_search: true,
+            },
+            llm_source: None,
+        };
+        let d = status_for_single_entry(entry);
+        assert_eq!(d.status, DocumentStatus::Clean);
+    }
+
+    #[test]
+    fn status_has_issues_for_via_search_mismatch() {
+        let entry = CheckedEntry {
+            entry: ReferenceEntry {
+                ordinal: 1,
+                raw_text: "Mismatch via search".into(),
+                doi: None,
+            },
+            outcome: EntryOutcome::Resolved {
+                doi: "10.1/mism".into(),
+                discrepancies: vec![Discrepancy {
+                    field: "year".into(),
+                    reference_value: "1999".into(),
+                    crossref_value: "2020".into(),
+                    dismissed: false,
+                }],
+                from_cache: false,
+                source: Default::default(),
+                via_search: true,
+            },
+            llm_source: None,
+        };
+        let d = status_for_single_entry(entry);
+        assert_eq!(d.status, DocumentStatus::HasIssues);
     }
 
     #[test]

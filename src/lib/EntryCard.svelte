@@ -14,6 +14,7 @@
   const llm = $derived(llmSource(entry));
   // Which agency resolved/suggested this entry (Crossref or DataCite).
   const resolvedSource = $derived(entry.outcome.Resolved?.source ?? "Crossref");
+  const viaSearch = $derived(entry.outcome.Resolved?.via_search ?? false);
 
   function open(url) {
     openUrl(url);
@@ -41,6 +42,10 @@
   {#if entry.entry.raw_text}
     <p class="srclabel">Text in document:</p>
     <blockquote class="ref">{#each linkifyParts(entry.entry.raw_text) as p}{#if p.url}<a class="link" href={p.url} onclick={(e) => { e.preventDefault(); open(p.url); }}>{p.url}</a>{:else}{p.t}{/if}{/each}</blockquote>
+  {/if}
+
+  {#if viaSearch}
+    <p class="suggest">No DOI: matched via bibliography search on {resolvedSource}.</p>
   {/if}
 
   {#if active.length}
