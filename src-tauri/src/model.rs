@@ -36,6 +36,16 @@ pub enum Source {
     DataCite,
 }
 
+impl Source {
+    /// Human-readable agency name for reports and the UI.
+    pub fn label(self) -> &'static str {
+        match self {
+            Source::Crossref => "Crossref",
+            Source::DataCite => "DataCite",
+        }
+    }
+}
+
 /// A DOI suggested for an entry that had none, found by title search.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SuggestedDoi {
