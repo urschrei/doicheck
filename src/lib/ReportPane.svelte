@@ -95,7 +95,7 @@
     <input placeholder="Search..." bind:value={query} />
   </div>
   {#if tally.cached + tally.fetched > 0}
-    <p class="tally">Crossref lookups: {tally.cached} from cache, {tally.fetched} from Crossref</p>
+    <p class="tally">Crossref/DataCite lookups: {tally.cached} from cache, {tally.fetched} fetched</p>
   {/if}
   {#if llmFlagged > 0}
     <p class="integrity-note">{llmFlagged} possible AI source{llmFlagged === 1 ? "" : "s"} flagged — see highlighted entries below.</p>

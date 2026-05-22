@@ -52,14 +52,15 @@ pub fn render(result: &CheckResult) -> String {
         );
     }
     let _ = writeln!(s, "  Checkable (with DOI):        {}", c.checkable);
-    let _ = writeln!(s, "  Resolved on Crossref:        {}", c.resolved);
-    // Crossref lookups (DOI resolves + bibliographic searches) served from cache
-    // versus the total made, so the figure reflects every avoided Crossref call.
+    let _ = writeln!(s, "  Resolved (Crossref/DataCite):{}", c.resolved);
+    // Lookups (DOI resolves + bibliographic searches, across Crossref and
+    // DataCite) served from cache versus the total made, so the figure reflects
+    // every avoided API call.
     let from_cache = c.from_cache + c.searched_from_cache;
     let lookups = c.resolved + c.searched;
     let _ = writeln!(
         s,
-        "  Crossref lookups from cache: {from_cache} of {lookups}"
+        "  Lookups from cache:          {from_cache} of {lookups}"
     );
     let _ = writeln!(s, "  Not resolved:                {}", c.unresolved);
     let _ = writeln!(s, "  Entries with discrepancies:  {}", c.with_discrepancies);
@@ -108,7 +109,10 @@ pub fn render(result: &CheckResult) -> String {
     for e in &result.entries {
         match &e.outcome {
             EntryOutcome::Resolved {
-                doi, discrepancies, ..
+                doi,
+                discrepancies,
+                source,
+                ..
             } if discrepancies.iter().any(|d| !d.dismissed) => {
                 any_disc = true;
                 let indent = entry_indent(e.entry.ordinal);
@@ -116,8 +120,12 @@ pub fn render(result: &CheckResult) -> String {
                 for d in discrepancies.iter().filter(|d| !d.dismissed) {
                     let _ = writeln!(
                         s,
-                        "{indent}{}  {}: ref \"{}\" vs Crossref \"{}\"",
-                        doi, d.field, d.reference_value, d.crossref_value
+                        "{indent}{}  {}: ref \"{}\" vs {} \"{}\"",
+                        doi,
+                        d.field,
+                        d.reference_value,
+                        source.label(),
+                        d.crossref_value
                     );
                 }
                 write_marker(&mut s, &indent, e);
@@ -127,7 +135,7 @@ pub fn render(result: &CheckResult) -> String {
                 let reason = if *network_error {
                     "could not be checked — retry needed"
                 } else {
-                    "DOI not found on Crossref"
+                    "DOI not found on Crossref or DataCite"
                 };
                 let indent = entry_indent(e.entry.ordinal);
                 let _ = writeln!(s, "  [{}] {}", e.entry.ordinal, snippet(&e.entry.raw_text));
@@ -164,8 +172,10 @@ pub fn render(result: &CheckResult) -> String {
                 let _ = writeln!(s, "  [{}] {}", e.entry.ordinal, snippet(&e.entry.raw_text));
                 let _ = writeln!(
                     s,
-                    "{indent}no DOI; closest Crossref match {} (title match {}%)",
-                    sug.doi, sug.title_match
+                    "{indent}no DOI; closest {} match {} (title match {}%)",
+                    sug.source.label(),
+                    sug.doi,
+                    sug.title_match
                 );
             }
             EntryOutcome::NoDoi {
@@ -185,7 +195,7 @@ pub fn render(result: &CheckResult) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{CheckedEntry, Discrepancy, ReferenceEntry, SuggestedDoi};
+    use crate::model::{CheckedEntry, Discrepancy, ReferenceEntry, Source, SuggestedDoi};
 
     #[test]
     fn renders_summary_discrepancies_and_missing() {
@@ -240,6 +250,59 @@ mod tests {
         assert!(text.contains("[33] Lee, C. (2018). Untitled work."));
         assert!(text.contains("no DOI; closest Crossref match 10.1000/xyz (title match 82%)"));
         assert!(text.contains("from cache:"));
+    }
+
+    #[test]
+    fn renders_datacite_source_in_discrepancies_and_suggestions() {
+        let result = CheckResult {
+            filename: "x.pdf".into(),
+            fingerprint: "fp".into(),
+            run_at: "now".into(),
+            bibliography_detected: true,
+            entries: vec![
+                CheckedEntry {
+                    entry: ReferenceEntry {
+                        ordinal: 1,
+                        raw_text: "A dataset.".into(),
+                        doi: Some("10.5281/zenodo.1".into()),
+                    },
+                    outcome: EntryOutcome::Resolved {
+                        doi: "10.5281/zenodo.1".into(),
+                        discrepancies: vec![Discrepancy {
+                            field: "year".into(),
+                            reference_value: "1999".into(),
+                            crossref_value: "2020".into(),
+                            dismissed: false,
+                        }],
+                        from_cache: false,
+                        source: Source::DataCite,
+                    },
+                    llm_source: None,
+                },
+                CheckedEntry {
+                    entry: ReferenceEntry {
+                        ordinal: 2,
+                        raw_text: "No DOI here.".into(),
+                        doi: None,
+                    },
+                    outcome: EntryOutcome::NoDoi {
+                        suggested: Some(SuggestedDoi {
+                            doi: "10.6084/m9.1".into(),
+                            title_match: 88,
+                            source: Source::DataCite,
+                        }),
+                        from_cache: false,
+                    },
+                    llm_source: None,
+                },
+            ],
+        };
+        let text = render(&result);
+        assert!(text.contains("vs DataCite"), "{text}");
+        assert!(
+            text.contains("closest DataCite match 10.6084/m9.1"),
+            "{text}"
+        );
     }
 
     #[test]

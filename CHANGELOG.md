@@ -18,6 +18,13 @@ omitted.
   re-querying Crossref, and a search hit also seeds the DOI cache so the same
   work resolves from cache if it is later cited with its DOI. Cached lookups
   expire after the 30-day cache TTL.
+- Resolve and check DOIs registered with DataCite, not only Crossref. A cited DOI
+  that Crossref does not index (datasets, preprints, theses, and ResearchGate
+  uploads are typically registered with DataCite) is now resolved via DataCite
+  rather than reported as not found, and references without a DOI fall back to a
+  DataCite search when Crossref has no match. The report and UI show which agency
+  each result came from, and DataCite results are cached separately under the
+  same 30-day TTL.
 
 ## [0.4.0] - 2026-05-22
 

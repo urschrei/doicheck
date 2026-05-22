@@ -12,6 +12,8 @@
   const dismissed = $derived(dismissedDiscrepancies(entry));
   const sugg = $derived(suggestion(entry));
   const llm = $derived(llmSource(entry));
+  // Which agency resolved/suggested this entry (Crossref or DataCite).
+  const resolvedSource = $derived(entry.outcome.Resolved?.source ?? "Crossref");
 
   function open(url) {
     openUrl(url);
@@ -44,7 +46,7 @@
   {#if active.length}
     <ul class="fields">
       {#each active as d (d.field)}
-        <li><b>{d.field}:</b> Crossref says &ldquo;{d.crossref_value}&rdquo; &mdash; not found in your reference
+        <li><b>{d.field}:</b> {resolvedSource} says &ldquo;{d.crossref_value}&rdquo; &mdash; not found in your reference
           <button class="linkbtn" onclick={() => ondismiss?.(doi, d.field)}>mark false positive</button></li>
       {/each}
     </ul>
@@ -60,7 +62,7 @@
   {/if}
 
   {#if sugg}
-    <p class="suggest">Closest Crossref match:
+    <p class="suggest">Closest {sugg.source ?? "Crossref"} match:
       <a class="link" href={`https://doi.org/${sugg.doi}`} onclick={(e) => { e.preventDefault(); open(`https://doi.org/${sugg.doi}`); }}>{sugg.doi}</a>
       ({sugg.title_match}%)
       <button onclick={() => copy(sugg.doi)}>copy</button></p>
