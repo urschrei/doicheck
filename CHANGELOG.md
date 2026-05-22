@@ -13,6 +13,11 @@ omitted.
   lists previously collapsed into one or two entries. Author lists that wrap
   across lines now stay within a single entry, and repeated page-footer lines
   (e.g. a name or ID number) are dropped rather than glued onto a reference.
+- Cache bibliographic-search lookups for references without a DOI: a suggested
+  DOI (title match of 80% or better) is reused on later runs instead of
+  re-querying Crossref, and a search hit also seeds the DOI cache so the same
+  work resolves from cache if it is later cited with its DOI. Cached lookups
+  expire after the 30-day cache TTL.
 
 ## [0.4.0] - 2026-05-22
 

@@ -1,7 +1,7 @@
 //! Async Crossref client: resolve a DOI, and search by bibliographic text.
 
 use crate::compare::Metadata;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 /// Resolve XML/HTML entity references that Crossref sometimes returns in string
@@ -43,7 +43,7 @@ struct SearchBody {
     items: Vec<Work>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct Work {
     #[serde(default)]
     title: Vec<String>,
@@ -57,16 +57,23 @@ struct Work {
     doi: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct Author {
     #[serde(default)]
     family: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct Issued {
     #[serde(rename = "date-parts", default)]
     date_parts: Vec<Vec<i32>>,
+}
+
+/// Re-serialises a matched search work in the `{ "message": <work> }` shape that
+/// `resolve_json` caches, so a search hit can seed the DOI cache.
+#[derive(Serialize)]
+struct WorkRecord<'a> {
+    message: &'a Work,
 }
 
 impl Work {
@@ -92,6 +99,9 @@ impl Work {
 pub struct SearchHit {
     pub doi: String,
     pub metadata: Metadata,
+    /// The matched work as `{ "message": <work> }` JSON, ready to seed the DOI
+    /// cache so a later direct resolve of `doi` is a cache hit.
+    pub record: String,
 }
 
 /// Read a `Retry-After` header value (seconds) from a response.
@@ -224,10 +234,12 @@ impl CrossrefClient {
             if w.doi.is_empty() {
                 return None;
             }
+            let record = serde_json::to_string(&WorkRecord { message: &w }).ok()?;
             let metadata = w.to_metadata();
             Some(SearchHit {
                 doi: w.doi,
                 metadata,
+                record,
             })
         }))
     }
@@ -268,6 +280,29 @@ mod tests {
         );
         assert_eq!(m.first_author_surname.as_deref(), Some("O'Neil"));
         assert_eq!(m.container_title.as_deref(), Some("A <Journal>"));
+    }
+
+    // The `record` a search hit carries (to seed the DOI cache) must parse back
+    // through `metadata_from_json` exactly like a resolved record.
+    #[test]
+    fn search_record_round_trips_through_metadata_from_json() {
+        let work = Work {
+            title: vec!["A Study of Widgets".to_string()],
+            author: vec![Author {
+                family: "Smith".to_string(),
+            }],
+            container_title: vec!["Journal of Widgets".to_string()],
+            issued: Some(Issued {
+                date_parts: vec![vec![2020]],
+            }),
+            doi: "10.1000/x".to_string(),
+        };
+        let record = serde_json::to_string(&WorkRecord { message: &work }).unwrap();
+        let m = metadata_from_json(&record);
+        assert_eq!(m.title.as_deref(), Some("A Study of Widgets"));
+        assert_eq!(m.first_author_surname.as_deref(), Some("Smith"));
+        assert_eq!(m.year, Some(2020));
+        assert_eq!(m.container_title.as_deref(), Some("Journal of Widgets"));
     }
 
     #[tokio::test]

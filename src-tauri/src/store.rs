@@ -16,6 +16,15 @@ pub enum StoreError {
 /// masked by a permanently cached record.
 const CACHE_TTL_DAYS: i64 = 30;
 
+/// Whether a cache row's RFC 3339 `fetched_at` is within the TTL. A stale or
+/// unparseable timestamp counts as not fresh, so the row is treated as a miss.
+fn fresh(fetched_at: &str) -> bool {
+    chrono::DateTime::parse_from_rfc3339(fetched_at).is_ok_and(|t| {
+        chrono::Utc::now().signed_duration_since(t.with_timezone(&chrono::Utc))
+            < chrono::Duration::days(CACHE_TTL_DAYS)
+    })
+}
+
 pub struct Store {
     conn: Connection,
 }
@@ -91,6 +100,11 @@ impl Store {
             );
             CREATE TABLE IF NOT EXISTS crossref_cache (
                 doi TEXT PRIMARY KEY,
+                json TEXT NOT NULL,
+                fetched_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS crossref_search_cache (
+                query TEXT PRIMARY KEY,
                 json TEXT NOT NULL,
                 fetched_at TEXT NOT NULL
             );
@@ -180,11 +194,7 @@ impl Store {
         };
         let json: String = row.get(0)?;
         let fetched_at: String = row.get(1)?;
-        let fresh = chrono::DateTime::parse_from_rfc3339(&fetched_at).is_ok_and(|t| {
-            chrono::Utc::now().signed_duration_since(t.with_timezone(&chrono::Utc))
-                < chrono::Duration::days(CACHE_TTL_DAYS)
-        });
-        Ok(fresh.then_some(json))
+        Ok(fresh(&fetched_at).then_some(json))
     }
 
     /// Store (or replace) the Crossref JSON for a DOI.
@@ -194,6 +204,33 @@ impl Store {
             "INSERT INTO crossref_cache(doi, json, fetched_at) VALUES(?1, ?2, ?3)
              ON CONFLICT(doi) DO UPDATE SET json = excluded.json, fetched_at = excluded.fetched_at",
             params![doi, json, now],
+        )?;
+        Ok(())
+    }
+
+    /// Cached bibliographic-search result for a query key, if present and within
+    /// the TTL. Keyed by a hash of the normalised reference text (see
+    /// `cache::QueryKey`), separate from the DOI cache.
+    pub fn search_cache_get(&self, query: &str) -> Result<Option<String>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT json, fetched_at FROM crossref_search_cache WHERE query = ?1")?;
+        let mut rows = stmt.query(params![query])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        let json: String = row.get(0)?;
+        let fetched_at: String = row.get(1)?;
+        Ok(fresh(&fetched_at).then_some(json))
+    }
+
+    /// Store (or replace) a bibliographic-search result for a query key.
+    pub fn search_cache_put(&self, query: &str, json: &str) -> Result<(), StoreError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO crossref_search_cache(query, json, fetched_at) VALUES(?1, ?2, ?3)
+             ON CONFLICT(query) DO UPDATE SET json = excluded.json, fetched_at = excluded.fetched_at",
+            params![query, json, now],
         )?;
         Ok(())
     }
@@ -534,6 +571,37 @@ mod tests {
             )
             .unwrap();
         assert_eq!(store.cache_get("10.1/x").unwrap(), None);
+    }
+
+    #[test]
+    fn search_cache_round_trips_and_is_separate_from_doi_cache() {
+        let store = Store::open_in_memory().unwrap();
+        assert_eq!(store.search_cache_get("qk1").unwrap(), None);
+        store
+            .search_cache_put("qk1", "{\"doi\":\"10.1/x\"}")
+            .unwrap();
+        assert_eq!(
+            store.search_cache_get("qk1").unwrap().as_deref(),
+            Some("{\"doi\":\"10.1/x\"}")
+        );
+        // The search cache must not be visible to the DOI cache and vice versa.
+        assert_eq!(store.cache_get("qk1").unwrap(), None);
+    }
+
+    #[test]
+    fn search_cache_entries_expire_after_ttl() {
+        let store = Store::open_in_memory().unwrap();
+        store.search_cache_put("qk1", "{}").unwrap();
+        assert!(store.search_cache_get("qk1").unwrap().is_some());
+        let stale = (chrono::Utc::now() - chrono::Duration::days(CACHE_TTL_DAYS + 1)).to_rfc3339();
+        store
+            .conn
+            .execute(
+                "UPDATE crossref_search_cache SET fetched_at = ?1 WHERE query = ?2",
+                params![stale, "qk1"],
+            )
+            .unwrap();
+        assert_eq!(store.search_cache_get("qk1").unwrap(), None);
     }
 
     #[test]
