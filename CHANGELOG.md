@@ -5,6 +5,27 @@ All notable changes to this project are documented here. The format is based on
 [Semantic Versioning](https://semver.org/). Release-only version bumps are
 omitted.
 
+## [0.4.0] - 2026-05-22
+
+- Fix a reference-checking false negative: the publication year was matched as a
+  substring, so a wrong year passed unflagged when its digits appeared inside a
+  larger number (e.g. a page or volume). It is now matched as a whole token,
+  while still accepting an author-date suffix such as `2020a`.
+- Expire cached Crossref records after 30 days, so a later retraction or
+  correction is eventually picked up rather than masked by a stale cache entry.
+- Guard the CSV export against spreadsheet formula injection: a field beginning
+  with `=`, `+`, `-`, or `@` is escaped so spreadsheets treat it as text.
+- Log previously-silent failures (PDFium/DOCX extraction, Crossref response
+  parsing, cache reads and writes) to make problems diagnosable.
+- Harden persistence: a result that fails to serialise is no longer stored as an
+  empty, unreadable row, and an unreadable stored result is logged rather than
+  silently treated as "no result".
+- Drop the unused per-entry `entries` and `discrepancies` tables (the full result
+  is stored as JSON); existing databases are migrated automatically.
+- Internal: reduce allocations, make `EntryOutcome` handling exhaustive, and
+  replace stringly-typed values (document status, export format, DOIs) with
+  dedicated types.
+
 ## [0.3.2] - 2026-05-21
 
 - Improve bibliography boundary detection: end the reference list before trailing
