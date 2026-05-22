@@ -13,6 +13,7 @@ export const latestCheck = (fingerprint) => invoke("latest_check", { fingerprint
 export const checkDocument = (path) => invoke("check_document", { path });
 export const exportReport = (path, fingerprint, format) =>
   invoke("export_report", { path, fingerprint, format });
+export const recheckDocument = (fingerprint) => invoke("recheck_document", { fingerprint });
 export const recheckFailures = (fingerprint) => invoke("recheck_failures", { fingerprint });
 export const deleteDocument = (fingerprint) => invoke("delete_document", { fingerprint });
 export const dismissDiscrepancy = (fingerprint, doi, field) =>

@@ -73,7 +73,8 @@ impl Store {
                 filename TEXT NOT NULL,
                 kind TEXT NOT NULL,
                 first_seen TEXT NOT NULL,
-                last_checked TEXT NOT NULL
+                last_checked TEXT NOT NULL,
+                path TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS checks (
                 id INTEGER PRIMARY KEY,
@@ -138,6 +139,17 @@ impl Store {
         if !has_network_failed {
             self.conn.execute(
                 "ALTER TABLE checks ADD COLUMN network_failed INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+        let has_path: bool = self.conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('documents') WHERE name = 'path'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )? > 0;
+        if !has_path {
+            self.conn.execute(
+                "ALTER TABLE documents ADD COLUMN path TEXT NOT NULL DEFAULT ''",
                 [],
             )?;
         }
@@ -392,6 +404,28 @@ impl Store {
         }
     }
 
+    /// Record the source file path for a document so it can be re-checked later.
+    pub fn set_document_path(&self, fingerprint: &str, path: &str) -> Result<(), StoreError> {
+        self.conn.execute(
+            "UPDATE documents SET path = ?2 WHERE fingerprint = ?1",
+            params![fingerprint, path],
+        )?;
+        Ok(())
+    }
+
+    /// The stored source file path for a document, if recorded and non-empty.
+    pub fn path_for(&self, fingerprint: &str) -> Result<Option<String>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path FROM documents WHERE fingerprint = ?1")?;
+        let mut rows = stmt.query(params![fingerprint])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        let path: String = row.get(0)?;
+        Ok((!path.is_empty()).then_some(path))
+    }
+
     /// Delete a document and all its checks. The shared DOI cache
     /// (`crossref_cache`) is deliberately left intact.
     pub fn delete_document(&mut self, fingerprint: &str) -> Result<(), StoreError> {
@@ -602,6 +636,21 @@ mod tests {
             )
             .unwrap();
         assert_eq!(store.search_cache_get("qk1").unwrap(), None);
+    }
+
+    #[test]
+    fn document_path_round_trips() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.save_check(&sample(), "pdf", "T").unwrap();
+        // No path recorded until set; empty reads as None.
+        assert_eq!(store.path_for("sha256:aaa").unwrap(), None);
+        store
+            .set_document_path("sha256:aaa", "/docs/a.pdf")
+            .unwrap();
+        assert_eq!(
+            store.path_for("sha256:aaa").unwrap().as_deref(),
+            Some("/docs/a.pdf")
+        );
     }
 
     #[test]
