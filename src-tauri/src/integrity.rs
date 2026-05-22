@@ -24,9 +24,9 @@ const MARKERS: &[&str] = &[
 /// whitespace, so a marker split across a PDF line wrap is still detected.
 pub fn llm_source(text: &str) -> Option<String> {
     let collapsed: String = text
-        .to_lowercase()
         .chars()
         .filter(|c| !c.is_whitespace())
+        .flat_map(char::to_lowercase)
         .collect();
     MARKERS
         .iter()

@@ -1,30 +1,24 @@
 //! Shared text normalisation used by comparison and search.
 
 use deunicode::deunicode;
+use std::collections::HashSet;
 
 /// Lowercase, transliterate diacritics, reduce to alphanumeric tokens.
 pub fn normalise(s: &str) -> String {
-    let lower = deunicode(s).to_lowercase();
-    lower
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
-        .collect::<String>()
-        .split_whitespace()
+    deunicode(s)
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
 }
 
-pub fn tokens(s: &str) -> Vec<String> {
-    normalise(s)
-        .split_whitespace()
-        .map(|t| t.to_string())
-        .collect()
-}
-
 /// Fraction (0.0-1.0) of `needle` tokens present in `haystack` tokens.
 pub fn token_coverage(haystack: &str, needle: &str) -> f64 {
-    let hay: std::collections::HashSet<String> = tokens(haystack).into_iter().collect();
-    let need = tokens(needle);
+    let hay_norm = normalise(haystack);
+    let hay: HashSet<&str> = hay_norm.split_whitespace().collect();
+    let need_norm = normalise(needle);
+    let need: Vec<&str> = need_norm.split_whitespace().collect();
     if need.is_empty() {
         return 0.0;
     }
@@ -37,15 +31,19 @@ pub fn token_coverage(haystack: &str, needle: &str) -> f64 {
 /// alphanumeric characters. Prevents false discrepancies for entries whose only
 /// content is a DOI (e.g. a sparse fallback window).
 pub fn is_comparable(reference: &str) -> bool {
-    let without_ids: String = reference
+    /// Minimum alphanumeric characters (after stripping identifiers) for a
+    /// reference to carry enough text to compare against Crossref metadata.
+    const MIN_COMPARABLE_ALNUM: usize = 15;
+    let alnum = reference
         .split_whitespace()
         .filter(|t| {
             let l = t.to_ascii_lowercase();
             !l.starts_with("http") && !l.starts_with("10.") && !l.contains("doi.org")
         })
-        .collect::<Vec<_>>()
-        .join(" ");
-    without_ids.chars().filter(|c| c.is_alphanumeric()).count() >= 15
+        .flat_map(str::chars)
+        .filter(|c| c.is_alphanumeric())
+        .count();
+    alnum >= MIN_COMPARABLE_ALNUM
 }
 
 #[cfg(test)]

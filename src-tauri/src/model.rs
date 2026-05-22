@@ -1,6 +1,7 @@
 //! Shared data types passed between pipeline stages and to the UI.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FileKind {
@@ -92,7 +93,7 @@ pub struct Progress {
 
 impl CheckResult {
     /// Mark discrepancies dismissed where (resolved DOI, field) is in `set`.
-    pub fn apply_dismissals(&mut self, set: &std::collections::HashSet<(String, String)>) {
+    pub fn apply_dismissals(&mut self, set: &HashSet<(String, String)>) {
         for ce in &mut self.entries {
             if let EntryOutcome::Resolved {
                 doi, discrepancies, ..
