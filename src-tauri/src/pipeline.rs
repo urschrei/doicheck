@@ -68,7 +68,10 @@ async fn outcome_for_entry(
             let key = QueryKey::new(&entry.raw_text);
             if let Some(json) = cache.search_get(&key) {
                 let suggested = serde_json::from_str::<SuggestedDoi>(&json).ok();
-                return EntryOutcome::NoDoi { suggested };
+                return EntryOutcome::NoDoi {
+                    suggested,
+                    from_cache: true,
+                };
             }
             let suggested = match client.search(&entry.raw_text).await {
                 Ok(Some(hit)) if !hit.doi.is_empty() => {
@@ -104,23 +107,33 @@ async fn outcome_for_entry(
                 | Err(CrossrefError::NotFound)
                 | Err(CrossrefError::Network(_)) => None,
             };
-            EntryOutcome::NoDoi { suggested }
+            EntryOutcome::NoDoi {
+                suggested,
+                from_cache: false,
+            }
         }
     }
 }
 
-/// Count a resolved outcome towards the cache/fetch tallies; other outcomes
-/// contribute to neither. Exhaustive so a new `EntryOutcome` variant forces a
-/// decision here rather than being silently dropped.
+/// Count an outcome's Crossref lookup towards the cache/fetch tallies: a
+/// resolved DOI or a no-DOI bibliographic search, each served from cache or
+/// fetched. Unresolved entries (failed lookups) contribute to neither.
+/// Exhaustive so a new `EntryOutcome` variant forces a decision here.
 fn tally(outcome: &EntryOutcome, cached: &mut usize, fetched: &mut usize) {
     match outcome {
         EntryOutcome::Resolved {
             from_cache: true, ..
+        }
+        | EntryOutcome::NoDoi {
+            from_cache: true, ..
         } => *cached += 1,
         EntryOutcome::Resolved {
             from_cache: false, ..
+        }
+        | EntryOutcome::NoDoi {
+            from_cache: false, ..
         } => *fetched += 1,
-        EntryOutcome::Unresolved { .. } | EntryOutcome::NoDoi { .. } => {}
+        EntryOutcome::Unresolved { .. } => {}
     }
 }
 
@@ -352,7 +365,9 @@ mod tests {
         .await;
 
         match &result.entries[0].outcome {
-            EntryOutcome::NoDoi { suggested: Some(s) } => {
+            EntryOutcome::NoDoi {
+                suggested: Some(s), ..
+            } => {
                 assert_eq!(s.doi, "10.1000/xyz");
                 assert!(s.title_match >= 80);
             }
@@ -390,7 +405,10 @@ mod tests {
         .await;
         assert!(matches!(
             &first.entries[0].outcome,
-            EntryOutcome::NoDoi { suggested: Some(_) }
+            EntryOutcome::NoDoi {
+                suggested: Some(_),
+                ..
+            }
         ));
 
         // Second run: the search mock is exhausted, so a fresh search would fail.
@@ -407,7 +425,16 @@ mod tests {
         )
         .await;
         match &second.entries[0].outcome {
-            EntryOutcome::NoDoi { suggested: Some(s) } => assert_eq!(s.doi, "10.1000/xyz"),
+            EntryOutcome::NoDoi {
+                suggested: Some(s),
+                from_cache,
+            } => {
+                assert_eq!(s.doi, "10.1000/xyz");
+                assert!(
+                    *from_cache,
+                    "the reused suggestion must be marked from_cache"
+                );
+            }
             other => panic!("expected cached suggestion, got {other:?}"),
         }
     }

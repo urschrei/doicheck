@@ -37,7 +37,7 @@ pub fn to_csv(result: &CheckResult) -> String {
                 };
                 (status, String::new(), String::new())
             }
-            EntryOutcome::NoDoi { suggested } => (
+            EntryOutcome::NoDoi { suggested, .. } => (
                 "no_doi",
                 String::new(),
                 suggested
@@ -130,6 +130,7 @@ mod tests {
                             doi: "10.1000/c".into(),
                             title_match: 90,
                         }),
+                        from_cache: false,
                     },
                     llm_source: None,
                 },
