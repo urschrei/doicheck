@@ -5,19 +5,8 @@ All notable changes to this project are documented here. The format is based on
 [Semantic Versioning](https://semver.org/). Release-only version bumps are
 omitted.
 
-## [Unreleased]
+## [0.5.0] - 2026-05-22
 
-- Segment author-date bibliographies whose years are unparenthesised (e.g.
-  Harvard/EndNote "SURNAME, A. 2020. Title", including all-caps surnames and
-  organisation authors, with the year wrapped onto its own line). Such reference
-  lists previously collapsed into one or two entries. Author lists that wrap
-  across lines now stay within a single entry, and repeated page-footer lines
-  (e.g. a name or ID number) are dropped rather than glued onto a reference.
-- Cache bibliographic-search lookups for references without a DOI: a suggested
-  DOI (title match of 80% or better) is reused on later runs instead of
-  re-querying Crossref, and a search hit also seeds the DOI cache so the same
-  work resolves from cache if it is later cited with its DOI. Cached lookups
-  expire after the 30-day cache TTL.
 - Resolve and check DOIs registered with DataCite, not only Crossref. A cited DOI
   that Crossref does not index (datasets, preprints, theses, and ResearchGate
   uploads are typically registered with DataCite) is now resolved via DataCite
@@ -25,6 +14,27 @@ omitted.
   DataCite search when Crossref has no match. The report and UI show which agency
   each result came from, and DataCite results are cached separately under the
   same 30-day TTL.
+- Cache bibliographic-search lookups for references without a DOI: a suggested
+  DOI (title match of 80% or better) is reused on later runs instead of
+  re-querying Crossref, and a search hit also seeds the DOI cache so the same
+  work resolves from cache if it is later cited with its DOI. Cached lookups
+  expire after the 30-day cache TTL.
+- Count search-cache hits in the cache tally: a no-DOI suggestion served from the
+  cache now shows as a cached lookup in the report and UI, so re-checking a
+  document reflects what the cache saved (previously only resolved-DOI cache hits
+  were counted).
+- Segment author-date bibliographies whose years are unparenthesised (e.g.
+  Harvard/EndNote "SURNAME, A. 2020. Title", including all-caps surnames and
+  organisation authors, with the year wrapped onto its own line). Such reference
+  lists previously collapsed into one or two entries. Author lists that wrap
+  across lines now stay within a single entry, and repeated page-footer lines
+  (e.g. a name or ID number) are dropped rather than glued onto a reference.
+- Fix "Re-check entire doc" for documents selected from the sidebar: the source
+  file path is now stored, so re-checking no longer requires the file to be
+  freshly opened (with a prompt to locate it if it has since moved).
+- Index checks(document_id) so latest-result lookups and document deletes use an
+  index rather than scanning the checks table, keeping them fast as check history
+  grows.
 
 ## [0.4.0] - 2026-05-22
 
