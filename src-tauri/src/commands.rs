@@ -2,6 +2,7 @@
 
 use crate::cache::StoreCache;
 use crate::crossref::CrossrefClient;
+use crate::datacite::DataCiteClient;
 use crate::model::Progress;
 use crate::store::{DocumentSummary, Store};
 use std::path::PathBuf;
@@ -115,6 +116,7 @@ async fn run_full_check(
         (email, concurrency)
     };
     let client = CrossrefClient::new(&email);
+    let datacite = DataCiteClient::new(&email);
     let run_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     let cache = StoreCache { store };
@@ -125,6 +127,7 @@ async fn run_full_check(
         run_at,
         &text,
         &client,
+        &datacite,
         &cache,
         concurrency,
         move |p: Progress| {
@@ -186,10 +189,12 @@ pub async fn recheck_failures(
     };
 
     let client = CrossrefClient::new(&email);
+    let datacite = DataCiteClient::new(&email);
     let app_for_progress = app.clone();
     let updated = crate::pipeline::recheck_failures(
         result,
         &client,
+        &datacite,
         &crate::cache::StoreCache {
             store: &state.store,
         },
