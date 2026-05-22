@@ -11,7 +11,7 @@ export function classify(entry) {
 }
 
 export const SEVERITY = {
-  unresolved: { label: "DOI not found on Crossref", colour: "var(--sev-fail)", order: 0 },
+  unresolved: { label: "DOI not found on Crossref or DataCite", colour: "var(--sev-fail)", order: 0 },
   network: { label: "Check failed (network)", colour: "var(--sev-fail)", order: 1 },
   mismatch: { label: "Metadata mismatch", colour: "var(--sev-warn)", order: 2 },
   no_doi_suggested: { label: "No DOI — suggestion available", colour: "var(--sev-info)", order: 3 },

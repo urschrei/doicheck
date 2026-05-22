@@ -5,6 +5,14 @@ All notable changes to this project are documented here. The format is based on
 [Semantic Versioning](https://semver.org/). Release-only version bumps are
 omitted.
 
+## [Unreleased]
+
+- Update the not-found wording in the UI to "DOI not found on Crossref or
+  DataCite" (the entry card label and the sidebar status tooltip), matching the
+  text report. A DOI is only marked unresolved after both agencies are checked,
+  so the previous Crossref-only wording was misleading. The help text now also
+  describes checks against both agencies and credits DataCite as a data source.
+
 ## [0.5.0] - 2026-05-22
 
 - Resolve and check DOIs registered with DataCite, not only Crossref. A cited DOI
