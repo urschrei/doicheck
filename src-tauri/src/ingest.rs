@@ -33,14 +33,15 @@ pub fn fingerprint(bytes: &[u8]) -> String {
 }
 
 pub fn kind_from_path(path: &Path) -> Result<FileKind, IngestError> {
-    match path
+    let ext = path
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
-    {
-        Some(ext) if ext == "pdf" => Ok(FileKind::Pdf),
-        Some(ext) if ext == "docx" => Ok(FileKind::Docx),
-        other => Err(IngestError::UnsupportedKind(other.unwrap_or_default())),
+        .map(str::to_lowercase);
+    match ext.as_deref() {
+        Some("pdf") => Ok(FileKind::Pdf),
+        Some("docx") => Ok(FileKind::Docx),
+        Some(other) => Err(IngestError::UnsupportedKind(other.to_string())),
+        None => Err(IngestError::UnsupportedKind(String::new())),
     }
 }
 

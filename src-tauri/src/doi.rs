@@ -1,6 +1,7 @@
 //! DOI extraction from free text and normalisation.
 
 use regex::Regex;
+use std::collections::HashSet;
 use std::sync::LazyLock;
 
 static DOI_RE: LazyLock<Regex> =
@@ -23,14 +24,15 @@ pub fn normalise(raw: &str) -> String {
 
 /// Extract all DOIs from text, normalised and de-duplicated, order preserved.
 pub fn extract_all(text: &str) -> Vec<String> {
-    let mut seen = Vec::new();
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
     for m in DOI_RE.find_iter(text) {
         let doi = normalise(m.as_str());
-        if !seen.contains(&doi) {
-            seen.push(doi);
+        if seen.insert(doi.clone()) {
+            out.push(doi);
         }
     }
-    seen
+    out
 }
 
 /// The first DOI in a single reference, if any.
@@ -45,7 +47,7 @@ pub fn first_in(text: &str) -> Option<String> {
 pub fn extract_with_context(text: &str) -> Vec<(String, String)> {
     const WINDOW: usize = 600;
     let mut out: Vec<(String, String)> = Vec::new();
-    let mut seen: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
     let mut prev_end = 0usize;
     for m in DOI_RE.find_iter(text) {
         let doi = normalise(m.as_str());
@@ -58,7 +60,7 @@ pub fn extract_with_context(text: &str) -> Vec<(String, String)> {
         let window = trim_to_last_entry_start(&text[start..m.end()]);
         let context = window.split_whitespace().collect::<Vec<_>>().join(" ");
         out.push((doi.clone(), context));
-        seen.push(doi);
+        seen.insert(doi);
         prev_end = m.end();
     }
     out
