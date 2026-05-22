@@ -1,6 +1,6 @@
 //! Orchestration: extracted text -> bibliography -> per-entry Crossref checks.
 
-use crate::cache::DoiCache;
+use crate::cache::{DoiCache, QueryKey, SearchCache};
 use crate::compare::compare;
 use crate::crossref::{CrossrefClient, CrossrefError};
 use crate::model::{CheckResult, CheckedEntry, EntryOutcome, Progress, SuggestedDoi};
@@ -58,13 +58,25 @@ async fn resolve_doi_outcome(
 async fn outcome_for_entry(
     entry: &crate::model::ReferenceEntry,
     client: &CrossrefClient,
-    cache: &(impl DoiCache + Sync),
+    cache: &(impl DoiCache + SearchCache + Sync),
 ) -> EntryOutcome {
     match &entry.doi {
         Some(doi) => resolve_doi_outcome(doi, &entry.raw_text, client, cache).await,
         None => {
+            // Search is keyed by the reference text. Reuse a cached suggestion
+            // before hitting the network.
+            let key = QueryKey::new(&entry.raw_text);
+            if let Some(json) = cache.search_get(&key) {
+                let suggested = serde_json::from_str::<SuggestedDoi>(&json).ok();
+                return EntryOutcome::NoDoi { suggested };
+            }
             let suggested = match client.search(&entry.raw_text).await {
                 Ok(Some(hit)) if !hit.doi.is_empty() => {
+                    // Seed the DOI cache with the matched work's record so a
+                    // later direct resolve of this DOI is a cache hit. Done
+                    // regardless of the suggestion threshold: the record is the
+                    // valid Crossref entry for that DOI either way.
+                    cache.put(&crate::doi::Doi::new(&hit.doi), &hit.record);
                     let cov = hit
                         .metadata
                         .title
@@ -72,11 +84,15 @@ async fn outcome_for_entry(
                         .map(|t| token_coverage(&entry.raw_text, t))
                         .unwrap_or(0.0);
                     if cov >= SUGGEST_THRESHOLD {
-                        Some(SuggestedDoi {
+                        let suggested = SuggestedDoi {
                             doi: hit.doi,
                             // Clamp to the documented 0-100 range of `title_match`.
                             title_match: (cov * 100.0).round().clamp(0.0, 100.0) as u8,
-                        })
+                        };
+                        if let Ok(json) = serde_json::to_string(&suggested) {
+                            cache.search_put(&key, &json);
+                        }
+                        Some(suggested)
                     } else {
                         None
                     }
@@ -184,7 +200,7 @@ pub async fn run(
     run_at: String,
     text: &str,
     client: &CrossrefClient,
-    cache: &(impl DoiCache + Sync),
+    cache: &(impl DoiCache + SearchCache + Sync),
     concurrency: usize,
     mut progress: impl FnMut(Progress),
 ) -> CheckResult {
@@ -342,6 +358,97 @@ mod tests {
             }
             other => panic!("expected a suggestion, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn search_suggestion_is_cached_and_reused() {
+        let server = MockServer::start().await;
+        let body = serde_json::json!({
+            "message": { "items": [{ "title": ["A Study of Widgets"], "DOI": "10.1000/xyz" }]}
+        });
+        // Respond to the search exactly once; a second search would 404.
+        Mock::given(method("GET"))
+            .and(query_param("rows", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        let client = CrossrefClient::with_base("", server.uri());
+        let cache = MemoryCache::default();
+        let text = "References\nSmith J. A Study of Widgets. Journal of Widgets.";
+
+        let first = run(
+            "a.pdf".into(),
+            "fp".into(),
+            "now".into(),
+            text,
+            &client,
+            &cache,
+            5,
+            |_| {},
+        )
+        .await;
+        assert!(matches!(
+            &first.entries[0].outcome,
+            EntryOutcome::NoDoi { suggested: Some(_) }
+        ));
+
+        // Second run: the search mock is exhausted, so a fresh search would fail.
+        // The suggestion must come from the search cache instead.
+        let second = run(
+            "a.pdf".into(),
+            "fp".into(),
+            "now".into(),
+            text,
+            &client,
+            &cache,
+            5,
+            |_| {},
+        )
+        .await;
+        match &second.entries[0].outcome {
+            EntryOutcome::NoDoi { suggested: Some(s) } => assert_eq!(s.doi, "10.1000/xyz"),
+            other => panic!("expected cached suggestion, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn search_hit_seeds_the_doi_cache() {
+        let server = MockServer::start().await;
+        let body = serde_json::json!({
+            "message": { "items": [{
+                "title": ["A Study of Widgets"],
+                "author": [{"family": "Smith"}],
+                "issued": {"date-parts": [[2020]]},
+                "DOI": "10.1000/xyz"
+            }]}
+        });
+        Mock::given(method("GET"))
+            .and(query_param("rows", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let client = CrossrefClient::with_base("", server.uri());
+        let cache = MemoryCache::default();
+        let text = "References\nSmith J. A Study of Widgets. Journal of Widgets.";
+        let _ = run(
+            "a.pdf".into(),
+            "fp".into(),
+            "now".into(),
+            text,
+            &client,
+            &cache,
+            5,
+            |_| {},
+        )
+        .await;
+
+        // The matched work's record is now in the DOI cache under its DOI, so a
+        // later direct resolve is a cache hit with usable metadata.
+        let seeded = cache.get(&crate::doi::Doi::new("10.1000/xyz"));
+        assert!(seeded.is_some(), "search hit should seed the DOI cache");
+        let meta = crate::crossref::metadata_from_json(&seeded.unwrap());
+        assert_eq!(meta.title.as_deref(), Some("A Study of Widgets"));
     }
 
     #[tokio::test]
