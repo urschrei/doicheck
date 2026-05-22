@@ -5,6 +5,15 @@ All notable changes to this project are documented here. The format is based on
 [Semantic Versioning](https://semver.org/). Release-only version bumps are
 omitted.
 
+## [Unreleased]
+
+- Segment author-date bibliographies whose years are unparenthesised (e.g.
+  Harvard/EndNote "SURNAME, A. 2020. Title", including all-caps surnames and
+  organisation authors, with the year wrapped onto its own line). Such reference
+  lists previously collapsed into one or two entries. Author lists that wrap
+  across lines now stay within a single entry, and repeated page-footer lines
+  (e.g. a name or ID number) are dropped rather than glued onto a reference.
+
 ## [0.4.0] - 2026-05-22
 
 - Fix a reference-checking false negative: the publication year was matched as a
