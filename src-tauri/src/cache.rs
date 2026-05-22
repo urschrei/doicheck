@@ -2,15 +2,16 @@
 //! without depending directly on the SQLite store (and tested with an
 //! in-memory implementation).
 
+use crate::doi::Doi;
 use crate::store::Store;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
 pub trait DoiCache {
     /// Cached Crossref JSON for a DOI, if present.
-    fn get(&self, doi: &str) -> Option<String>;
+    fn get(&self, doi: &Doi) -> Option<String>;
     /// Store Crossref JSON for a DOI. Errors are swallowed (best-effort cache).
-    fn put(&self, doi: &str, json: &str);
+    fn put(&self, doi: &Doi, json: &str);
 }
 
 /// In-memory cache for tests.
@@ -20,12 +21,12 @@ pub struct MemoryCache {
 }
 
 impl DoiCache for MemoryCache {
-    fn get(&self, doi: &str) -> Option<String> {
-        self.map.lock().ok()?.get(doi).cloned()
+    fn get(&self, doi: &Doi) -> Option<String> {
+        self.map.lock().ok()?.get(doi.as_str()).cloned()
     }
-    fn put(&self, doi: &str, json: &str) {
+    fn put(&self, doi: &Doi, json: &str) {
         if let Ok(mut m) = self.map.lock() {
-            m.insert(doi.to_string(), json.to_string());
+            m.insert(doi.as_str().to_string(), json.to_string());
         }
     }
 }
@@ -37,7 +38,7 @@ pub struct StoreCache<'a> {
 }
 
 impl DoiCache for StoreCache<'_> {
-    fn get(&self, doi: &str) -> Option<String> {
+    fn get(&self, doi: &Doi) -> Option<String> {
         let store = match self.store.lock() {
             Ok(store) => store,
             Err(e) => {
@@ -45,15 +46,15 @@ impl DoiCache for StoreCache<'_> {
                 return None;
             }
         };
-        match store.cache_get(doi) {
+        match store.cache_get(doi.as_str()) {
             Ok(hit) => hit,
             Err(e) => {
-                log::warn!("crossref cache: read failed for {doi}: {e}");
+                log::warn!("crossref cache: read failed for {}: {e}", doi.as_str());
                 None
             }
         }
     }
-    fn put(&self, doi: &str, json: &str) {
+    fn put(&self, doi: &Doi, json: &str) {
         let store = match self.store.lock() {
             Ok(store) => store,
             Err(e) => {
@@ -61,8 +62,8 @@ impl DoiCache for StoreCache<'_> {
                 return;
             }
         };
-        if let Err(e) = store.cache_put(doi, json) {
-            log::warn!("crossref cache: write failed for {doi}: {e}");
+        if let Err(e) = store.cache_put(doi.as_str(), json) {
+            log::warn!("crossref cache: write failed for {}: {e}", doi.as_str());
         }
     }
 }
@@ -74,8 +75,9 @@ mod tests {
     #[test]
     fn memory_cache_round_trips() {
         let c = MemoryCache::default();
-        assert_eq!(c.get("10.1/x"), None);
-        c.put("10.1/x", "{}");
-        assert_eq!(c.get("10.1/x").as_deref(), Some("{}"));
+        let doi = Doi::new("10.1/x");
+        assert_eq!(c.get(&doi), None);
+        c.put(&doi, "{}");
+        assert_eq!(c.get(&doi).as_deref(), Some("{}"));
     }
 }

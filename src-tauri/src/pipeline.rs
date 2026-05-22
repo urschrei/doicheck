@@ -18,12 +18,13 @@ async fn resolve_doi_outcome(
     client: &CrossrefClient,
     cache: &(impl crate::cache::DoiCache + Sync),
 ) -> EntryOutcome {
-    let (json, from_cache) = match cache.get(doi) {
+    let key = crate::doi::Doi::new(doi);
+    let (json, from_cache) = match cache.get(&key) {
         Some(j) => (Ok(j), true),
         None => {
             let fetched = client.resolve_json(doi).await;
             if let Ok(ref j) = fetched {
-                cache.put(doi, j);
+                cache.put(&key, j);
             }
             (fetched, false)
         }
@@ -402,7 +403,7 @@ mod tests {
         let server = MockServer::start().await;
         let cache = MemoryCache::default();
         cache.put(
-            "10.1000/abc",
+            &crate::doi::Doi::new("10.1000/abc"),
             &serde_json::json!({"message":{"title":["Cached"],"DOI":"10.1000/abc"}}).to_string(),
         );
         let client = CrossrefClient::with_base("", server.uri());
@@ -448,7 +449,7 @@ mod tests {
             |_| {},
         )
         .await;
-        assert!(cache.get("10.1000/abc").is_some());
+        assert!(cache.get(&crate::doi::Doi::new("10.1000/abc")).is_some());
     }
 
     #[tokio::test]
@@ -477,7 +478,7 @@ mod tests {
             EntryOutcome::Unresolved { network_error, .. } => assert!(*network_error),
             other => panic!("expected transient Unresolved, got {other:?}"),
         }
-        assert!(cache.get("10.1000/abc").is_none());
+        assert!(cache.get(&crate::doi::Doi::new("10.1000/abc")).is_none());
     }
 
     #[tokio::test]

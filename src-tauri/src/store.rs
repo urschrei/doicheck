@@ -9,6 +9,11 @@ pub enum StoreError {
     Sqlite(#[from] rusqlite::Error),
 }
 
+/// Cached Crossref records older than this are treated as a miss and re-fetched,
+/// so a later retraction or correction is eventually picked up rather than
+/// masked by a permanently cached record.
+const CACHE_TTL_DAYS: i64 = 30;
+
 pub struct Store {
     conn: Connection,
 }
@@ -155,17 +160,24 @@ impl Store {
         self.set_setting("concurrency", &value.to_string())
     }
 
-    /// The cached Crossref JSON for a DOI, if present.
+    /// The cached Crossref JSON for a DOI, if present and not older than the TTL.
+    /// A stale or unparseable `fetched_at` is treated as a miss so the record is
+    /// re-fetched.
     pub fn cache_get(&self, doi: &str) -> Result<Option<String>, StoreError> {
         let mut stmt = self
             .conn
-            .prepare("SELECT json FROM crossref_cache WHERE doi = ?1")?;
+            .prepare("SELECT json, fetched_at FROM crossref_cache WHERE doi = ?1")?;
         let mut rows = stmt.query(params![doi])?;
-        if let Some(row) = rows.next()? {
-            Ok(Some(row.get(0)?))
-        } else {
-            Ok(None)
-        }
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        let json: String = row.get(0)?;
+        let fetched_at: String = row.get(1)?;
+        let fresh = chrono::DateTime::parse_from_rfc3339(&fetched_at).is_ok_and(|t| {
+            chrono::Utc::now().signed_duration_since(t.with_timezone(&chrono::Utc))
+                < chrono::Duration::days(CACHE_TTL_DAYS)
+        });
+        Ok(fresh.then_some(json))
     }
 
     /// Store (or replace) the Crossref JSON for a DOI.
@@ -534,6 +546,23 @@ mod tests {
             store.cache_get("10.1/x").unwrap().as_deref(),
             Some("{\"v\":2}")
         );
+    }
+
+    #[test]
+    fn cache_entries_expire_after_ttl() {
+        let store = Store::open_in_memory().unwrap();
+        store.cache_put("10.1/x", "{}").unwrap();
+        assert!(store.cache_get("10.1/x").unwrap().is_some());
+        // Backdate the entry beyond the TTL; it must then read as a miss.
+        let stale = (chrono::Utc::now() - chrono::Duration::days(CACHE_TTL_DAYS + 1)).to_rfc3339();
+        store
+            .conn
+            .execute(
+                "UPDATE crossref_cache SET fetched_at = ?1 WHERE doi = ?2",
+                params![stale, "10.1/x"],
+            )
+            .unwrap();
+        assert_eq!(store.cache_get("10.1/x").unwrap(), None);
     }
 
     #[test]
