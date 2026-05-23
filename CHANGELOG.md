@@ -5,7 +5,7 @@ All notable changes to this project are documented here. The format is based on
 [Semantic Versioning](https://semver.org/). Release-only version bumps are
 omitted.
 
-## [Unreleased]
+## [0.5.1] - 2026-05-23
 
 - Segment MLA/Chicago author-title reference lists. Previously the entry-start
   detector recognised only numbered, parenthesised-year, and Harvard
@@ -28,6 +28,18 @@ omitted.
   match, a flagged mismatch otherwise) and annotated "No DOI: matched via
   bibliography search on [source]". Such entries are reported among the
   missing-DOI references and counted separately from cited-DOI lookups.
+- Style the entry card's "Closest match" suggestion and "matched via bibliography
+  search" annotation lines, which had no CSS rule and rendered as plain
+  paragraphs, with the muted, slightly smaller secondary-text style used by the
+  card's other secondary text.
+- Present metadata mismatches on the entry card as "[field] should be [value]",
+  the value being what Crossref or DataCite holds, in place of the previous
+  "[source] says X — not found in your reference" wording. The cited DOI is no
+  longer repeated below the card: "copy DOI" and "open DOI" buttons sit in a
+  separated footer, and on an entry whose DOI did not resolve on either agency
+  "open DOI" is disabled and the DOI link in the reference text is shown red. The
+  text report now distinguishes a field absent from the reference from one that
+  disagrees, recording the cited year on a year mismatch.
 
 ## [0.5.0] - 2026-05-22
 
