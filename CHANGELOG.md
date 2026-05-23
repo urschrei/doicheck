@@ -7,6 +7,16 @@ omitted.
 
 ## [Unreleased]
 
+- Segment MLA/Chicago author-title reference lists. Previously the entry-start
+  detector recognised only numbered, parenthesised-year, and Harvard
+  ("Surname, Initial.") openers, so an MLA list (full given names, an
+  unparenthesised year, a quoted title) collapsed into a single clump: the first
+  reference was dropped and the rest joined into one entry. An opener is now also
+  recognised by a quoted title following the author block, or by
+  "Surname, Given Names. Title" for an unquoted book or report. A wrapped journal
+  line that begins with a capitalised word and a parenthesised year (e.g.
+  "Top. 214, 481-518 (2012).") is no longer mistaken for a new entry, because the
+  text before a parenthesised year must be author-like (carry no digits).
 - Update the not-found wording in the UI to "DOI not found on Crossref or
   DataCite" (the entry card label and the sidebar status tooltip), matching the
   text report. A DOI is only marked unresolved after both agencies are checked,
