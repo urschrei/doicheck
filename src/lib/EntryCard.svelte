@@ -15,6 +15,16 @@
   // Which agency resolved/suggested this entry (Crossref or DataCite).
   const resolvedSource = $derived(entry.outcome.Resolved?.source ?? "Crossref");
   const viaSearch = $derived(entry.outcome.Resolved?.via_search ?? false);
+  // Only a confirmed Crossref/DataCite match has a DOI worth opening; an
+  // unresolved DOI did not resolve on either agency.
+  const resolved = $derived(!!entry.outcome.Resolved);
+
+  // A linkified URL that points at a DOI, so an unresolved entry can flag it.
+  const isDoiUrl = (u) => /doi\.org\//i.test(u) || /\/10\.\d{4,}/.test(u);
+
+  // Friendly labels for the discrepancy field tag.
+  const FIELD_LABELS = { title: "title", author: "author(s)", year: "year", container: "container" };
+  const fieldLabel = (f) => FIELD_LABELS[f] ?? f;
 
   function open(url) {
     openUrl(url);
@@ -41,7 +51,7 @@
 
   {#if entry.entry.raw_text}
     <p class="srclabel">Text in document:</p>
-    <blockquote class="ref">{#each linkifyParts(entry.entry.raw_text) as p}{#if p.url}<a class="link" href={p.url} onclick={(e) => { e.preventDefault(); open(p.url); }}>{p.url}</a>{:else}{p.t}{/if}{/each}</blockquote>
+    <blockquote class="ref">{#each linkifyParts(entry.entry.raw_text) as p}{#if p.url}<a class="link" class:badlink={!resolved && isDoiUrl(p.url)} href={p.url} onclick={(e) => { e.preventDefault(); open(p.url); }}>{p.url}</a>{:else}{p.t}{/if}{/each}</blockquote>
   {/if}
 
   {#if viaSearch}
@@ -49,10 +59,13 @@
   {/if}
 
   {#if active.length}
-    <ul class="fields">
+    <ul class="fields mismatchlist">
       {#each active as d (d.field)}
-        <li><b>{d.field}:</b> {resolvedSource} says &ldquo;{d.crossref_value}&rdquo; &mdash; not found in your reference
-          <button class="linkbtn" onclick={() => ondismiss?.(doi, d.field)}>mark false positive</button></li>
+        <li>
+          <span class="fname">{fieldLabel(d.field)}</span> should be
+          <span class="now" title="{resolvedSource} record">{d.crossref_value}</span>
+          <button class="linkbtn" onclick={() => ondismiss?.(doi, d.field)}>mark false positive</button>
+        </li>
       {/each}
     </ul>
   {/if}
@@ -60,7 +73,7 @@
   {#if dismissed.length}
     <ul class="fields dismissedlist">
       {#each dismissed as d (d.field)}
-        <li><b>{d.field}:</b> dismissed as false positive
+        <li><b>{fieldLabel(d.field)}:</b> dismissed as false positive
           <button class="linkbtn" onclick={() => onundismiss?.(doi, d.field)}>undo</button></li>
       {/each}
     </ul>
@@ -75,8 +88,9 @@
 
   {#if doi}
     <div class="actions">
-      <a class="link" href={`https://doi.org/${doi}`} onclick={(e) => { e.preventDefault(); open(`https://doi.org/${doi}`); }}>{doi}</a>
       <button onclick={() => copy(doi)}>copy DOI</button>
+      <button onclick={() => open(`https://doi.org/${doi}`)} disabled={!resolved}
+        title={resolved ? "" : "DOI did not resolve on Crossref or DataCite"}>open DOI</button>
     </div>
   {/if}
 </div>
@@ -92,11 +106,17 @@
   .ref { color: var(--text); margin: 0 0 6px; padding: 5px 9px; background: var(--bg-sidebar); border-left: 3px solid var(--border); border-radius: 0 4px 4px 0; }
   .fields { margin: 4px 0; padding-left: 18px; }
   .fields li { margin: 2px 0; }
+  .mismatchlist { list-style: none; padding-left: 0; }
+  .mismatchlist li { margin: 3px 0; }
+  .fname { font-weight: 700; text-decoration: underline; text-underline-offset: 2px; text-transform: capitalize; }
+  .now { color: var(--sev-ok); font-weight: 700; }
   .dismissedlist { color: var(--text-muted); }
   .linkbtn { border: 0; background: transparent; color: var(--accent); text-decoration: underline; cursor: pointer; font: inherit; font-size: 11px; padding: 0 0 0 4px; }
   .dismissedlist .linkbtn { color: var(--text-muted); }
   .suggest { font-size: 12px; color: var(--text-muted); margin: 4px 0; }
-  .actions { display: flex; gap: 6px; margin-top: 4px; align-items: center; }
+  .actions { display: flex; gap: 6px; align-items: center; margin: 8px -10px -8px; padding: 8px 10px; border-top: 1px solid var(--border-soft); background: var(--bg-sidebar); border-radius: 0 0 5px 5px; }
   button { font: inherit; font-size: 12px; padding: 2px 8px; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
   .link { color: var(--accent); text-decoration: underline; cursor: pointer; }
+  .badlink { color: var(--sev-fail); }
 </style>

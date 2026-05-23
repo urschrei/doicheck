@@ -51,9 +51,11 @@
 
       <h3>Mismatches and false positives</h3>
       <ul>
-        <li>A flagged field shows what Crossref or DataCite holds; if it is wrong, use
-          <b>mark false positive</b>. Dismissals are remembered for that document and
-          can be undone.</li>
+        <li>Each flagged field reads &ldquo;[field] should be [value]&rdquo;, where the
+          value (shown in green) is what Crossref or DataCite holds and could not be
+          matched in your reference.</li>
+        <li>If a flag is wrong, use <b>mark false positive</b>. Dismissals are remembered
+          for that document and can be undone.</li>
       </ul>
 
       <h3>Re-checking, cache and offline</h3>

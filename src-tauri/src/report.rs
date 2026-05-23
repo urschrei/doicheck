@@ -123,15 +123,29 @@ pub fn render(result: &CheckResult) -> String {
                     let _ = writeln!(s, "{indent}no DOI; matched via {} search", source.label());
                 }
                 for d in discrepancies.iter().filter(|d| !d.dismissed) {
-                    let _ = writeln!(
-                        s,
-                        "{indent}{}  {}: ref \"{}\" vs {} \"{}\"",
-                        doi,
-                        d.field,
-                        d.reference_value,
-                        source.label(),
-                        d.crossref_value
-                    );
+                    // An empty reference value means the field could not be
+                    // located in the reference at all, so there is nothing to
+                    // contrast it against.
+                    if d.reference_value.is_empty() {
+                        let _ = writeln!(
+                            s,
+                            "{indent}{}  {}: {} \"{}\" not found in reference",
+                            doi,
+                            d.field,
+                            source.label(),
+                            d.crossref_value
+                        );
+                    } else {
+                        let _ = writeln!(
+                            s,
+                            "{indent}{}  {}: ref \"{}\" vs {} \"{}\"",
+                            doi,
+                            d.field,
+                            d.reference_value,
+                            source.label(),
+                            d.crossref_value
+                        );
+                    }
                 }
                 write_marker(&mut s, &indent, e);
             }
@@ -237,7 +251,7 @@ mod tests {
                         doi: "10.1/yyy".into(),
                         discrepancies: vec![Discrepancy {
                             field: "title".into(),
-                            reference_value: "(title not found in reference)".into(),
+                            reference_value: String::new(),
                             crossref_value: "Neural Things".into(),
                             dismissed: false,
                         }],
@@ -269,7 +283,7 @@ mod tests {
         assert!(text.contains("Document:     thesis.pdf"));
         assert!(text.contains("[12] Smith, J. (2020). Neural things. Journal."));
         assert!(text.contains("10.1/yyy  title:"));
-        assert!(text.contains("Neural Things"));
+        assert!(text.contains("title: Crossref \"Neural Things\" not found in reference"));
         assert!(text.contains("[33] Lee, C. (2018). Untitled work."));
         assert!(text.contains("no DOI; closest Crossref match 10.1000/xyz (title match 82%)"));
         assert!(text.contains("from cache:"));
