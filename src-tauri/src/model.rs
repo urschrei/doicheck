@@ -57,6 +57,22 @@ pub struct SuggestedDoi {
     pub source: Source,
 }
 
+/// What the doi.org registration-agency lookup reported for an unresolved DOI.
+/// Carried on `EntryOutcome::Unresolved` so the UI can tell a DOI that is not
+/// registered anywhere from a valid DOI that Crossref and DataCite simply do not
+/// index. `Unknown` covers a DOI that was not checked (a network failure, or a
+/// result stored before this field existed).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum Registration {
+    #[default]
+    Unknown,
+    /// doi.org has no record of the DOI string.
+    Unregistered,
+    /// Registered with the named agency (e.g. "mEDRA", "JaLC"; or Crossref or
+    /// DataCite when their REST metadata is missing despite registration).
+    Agency(String),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EntryOutcome {
     Resolved {
@@ -75,6 +91,16 @@ pub enum EntryOutcome {
     Unresolved {
         doi: String,
         network_error: bool,
+        /// What the doi.org registration-agency lookup reported. Defaults to
+        /// `Unknown` so results stored before this field existed still
+        /// deserialise.
+        #[serde(default)]
+        registration: Registration,
+        /// A bibliographic-search match for the reference text, found when the
+        /// cited DOI did not resolve, so the UI can offer the likely correct DOI
+        /// or note that no record matches. Defaults to `None`.
+        #[serde(default)]
+        suggested: Option<SuggestedDoi>,
     },
     NoDoi {
         suggested: Option<SuggestedDoi>,
@@ -265,6 +291,8 @@ mod tests {
                     outcome: EntryOutcome::Unresolved {
                         doi: "10.1/c".into(),
                         network_error: false,
+                        registration: Registration::Unknown,
+                        suggested: None,
                     },
                     llm_source: None,
                 },
@@ -313,6 +341,8 @@ mod tests {
                     outcome: EntryOutcome::Unresolved {
                         doi: "10.1/a".into(),
                         network_error: true,
+                        registration: Registration::Unknown,
+                        suggested: None,
                     },
                     llm_source: None,
                 },
@@ -325,6 +355,8 @@ mod tests {
                     outcome: EntryOutcome::Unresolved {
                         doi: "10.1/b".into(),
                         network_error: false,
+                        registration: Registration::Unknown,
+                        suggested: None,
                     },
                     llm_source: None,
                 },

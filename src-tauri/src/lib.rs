@@ -14,6 +14,7 @@ pub mod integrity;
 pub mod lookup;
 pub mod model;
 pub mod pipeline;
+pub mod registration;
 pub mod report;
 pub mod store;
 pub mod text;

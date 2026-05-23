@@ -47,6 +47,26 @@ export function suggestion(entry) {
   return entry.outcome.NoDoi ? entry.outcome.NoDoi.suggested : null;
 }
 
+// The Unresolved outcome payload (doi, network_error, registration, suggested),
+// or null for any other outcome.
+export function unresolved(entry) {
+  return entry.outcome.Unresolved ?? null;
+}
+
+// Interpret an Unresolved entry's doi.org registration status. The Rust enum
+// serialises as the string "Unknown"/"Unregistered" or { Agency: name }.
+// Returns one of: { kind: "agency", agency }, { kind: "unregistered" },
+// { kind: "network" } (could not be checked), or { kind: "unknown" }.
+export function registrationState(entry) {
+  const u = unresolved(entry);
+  if (!u) return { kind: "unknown" };
+  if (u.network_error) return { kind: "network" };
+  const r = u.registration;
+  if (r && typeof r === "object" && "Agency" in r) return { kind: "agency", agency: r.Agency };
+  if (r === "Unregistered") return { kind: "unregistered" };
+  return { kind: "unknown" };
+}
+
 export function llmSource(entry) {
   return entry.llm_source || null;
 }

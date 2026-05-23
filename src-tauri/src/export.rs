@@ -91,7 +91,7 @@ fn csv_field(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{CheckedEntry, Discrepancy, ReferenceEntry, SuggestedDoi};
+    use crate::model::{CheckedEntry, Discrepancy, ReferenceEntry, Registration, SuggestedDoi};
 
     fn result() -> CheckResult {
         CheckResult {
@@ -185,6 +185,8 @@ mod tests {
                     outcome: EntryOutcome::Unresolved {
                         doi: "10.1/a".into(),
                         network_error: true,
+                        registration: Registration::Unknown,
+                        suggested: None,
                     },
                     llm_source: None,
                 },
@@ -197,6 +199,8 @@ mod tests {
                     outcome: EntryOutcome::Unresolved {
                         doi: "10.1/b".into(),
                         network_error: false,
+                        registration: Registration::Unknown,
+                        suggested: None,
                     },
                     llm_source: None,
                 },

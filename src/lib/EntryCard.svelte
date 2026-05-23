@@ -1,6 +1,6 @@
 <script>
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { classify, SEVERITY, entryDoi, activeDiscrepancies, dismissedDiscrepancies, suggestion, llmSource } from "$lib/result.js";
+  import { classify, SEVERITY, entryDoi, activeDiscrepancies, dismissedDiscrepancies, suggestion, llmSource, unresolved, registrationState } from "$lib/result.js";
   import { linkifyParts } from "$lib/linkify.js";
 
   let { entry, ondismiss, onundismiss } = $props();
@@ -15,11 +15,22 @@
   // Which agency resolved/suggested this entry (Crossref or DataCite).
   const resolvedSource = $derived(entry.outcome.Resolved?.source ?? "Crossref");
   const viaSearch = $derived(entry.outcome.Resolved?.via_search ?? false);
-  // Only a confirmed Crossref/DataCite match has a DOI worth opening; an
-  // unresolved DOI did not resolve on either agency.
   const resolved = $derived(!!entry.outcome.Resolved);
+  // For an unresolved entry: its payload, its doi.org registration state, and a
+  // bibliographic-search match for it (the likely correct DOI), if any.
+  const unres = $derived(unresolved(entry));
+  const regState = $derived(registrationState(entry));
+  const unresSugg = $derived(unres?.suggested ?? null);
+  // The DOI is worth opening when it resolves (Resolved) or is registered with
+  // another agency; an unregistered or unchecked DOI is not.
+  const doiExists = $derived(resolved || regState.kind === "agency");
+  // Only a DOI confirmed to be unregistered is flagged red in the reference text.
+  const doiBad = $derived(regState.kind === "unregistered");
+  // The DOI is not registered and no record matches the reference: we simply
+  // cannot find it, which warrants a full red card border.
+  const notFound = $derived(doiBad && !unresSugg);
 
-  // A linkified URL that points at a DOI, so an unresolved entry can flag it.
+  // A linkified URL that points at a DOI, so an unregistered entry can flag it.
   const isDoiUrl = (u) => /doi\.org\//i.test(u) || /\/10\.\d{4,}/.test(u);
 
   // Friendly labels for the discrepancy field tag.
@@ -39,7 +50,7 @@
   }
 </script>
 
-<div class="card" class:flagged={llm} style={llm ? "" : `border-left-color:${sev.colour}`}>
+<div class="card" class:flagged={llm} class:notfound={notFound && !llm} style={llm || notFound ? "" : `border-left-color:${sev.colour}`}>
   {#if llm}
     <div class="integrity">Possible AI source — reference URL contains "{llm}"</div>
   {/if}
@@ -51,11 +62,27 @@
 
   {#if entry.entry.raw_text}
     <p class="srclabel">Text in document:</p>
-    <blockquote class="ref">{#each linkifyParts(entry.entry.raw_text) as p}{#if p.url}<a class="link" class:badlink={!resolved && isDoiUrl(p.url)} href={p.url} onclick={(e) => { e.preventDefault(); open(p.url); }}>{p.url}</a>{:else}{p.t}{/if}{/each}</blockquote>
+    <blockquote class="ref">{#each linkifyParts(entry.entry.raw_text) as p}{#if p.url}<a class="link" class:badlink={doiBad && isDoiUrl(p.url)} href={p.url} onclick={(e) => { e.preventDefault(); open(p.url); }}>{p.url}</a>{:else}{p.t}{/if}{/each}</blockquote>
   {/if}
 
   {#if viaSearch}
     <p class="suggest">No DOI: matched via bibliography search on {resolvedSource}.</p>
+  {/if}
+
+  {#if unres && regState.kind !== "network"}
+    {#if regState.kind === "agency"}
+      <p class="suggest">Valid DOI, registered with {regState.agency} — not indexed by Crossref or DataCite.
+        <a class="link" href={`https://doi.org/${doi}`} onclick={(e) => { e.preventDefault(); open(`https://doi.org/${doi}`); }}>doi.org/{doi}</a></p>
+    {:else if regState.kind === "unregistered"}
+      {#if unresSugg}
+        <p class="suggest">This DOI is not registered. Closest {unresSugg.source ?? "Crossref"} match:
+          <a class="link" href={`https://doi.org/${unresSugg.doi}`} onclick={(e) => { e.preventDefault(); open(`https://doi.org/${unresSugg.doi}`); }}>{unresSugg.doi}</a>
+          ({unresSugg.title_match}%)
+          <button onclick={() => copy(unresSugg.doi)}>copy</button></p>
+      {:else}
+        <p class="suggest unregistered">This DOI is not registered, and no record matches this reference&rsquo;s title or authors &mdash; verify this reference exists.</p>
+      {/if}
+    {/if}
   {/if}
 
   {#if active.length}
@@ -89,8 +116,8 @@
   {#if doi}
     <div class="actions">
       <button onclick={() => copy(doi)}>copy DOI</button>
-      <button onclick={() => open(`https://doi.org/${doi}`)} disabled={!resolved}
-        title={resolved ? "" : "DOI did not resolve on Crossref or DataCite"}>open DOI</button>
+      <button onclick={() => open(`https://doi.org/${doi}`)} disabled={!doiExists}
+        title={doiExists ? "" : "This DOI does not resolve"}>open DOI</button>
     </div>
   {/if}
 </div>
@@ -98,6 +125,7 @@
 <style>
   .card { background: var(--bg-elevated); border: 1px solid var(--border-soft); border-left-width: 3px; border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; }
   .card.flagged { border: 2px solid var(--integrity); }
+  .card.notfound { border: 2px solid var(--sev-fail); }
   .integrity { background: var(--integrity); color: #fff; font-weight: 600; font-size: 12px; padding: 3px 8px; border-radius: 4px; margin-bottom: 6px; }
   .head { display: flex; align-items: center; gap: 6px; }
   .ord { font-weight: 600; }
@@ -114,6 +142,7 @@
   .linkbtn { border: 0; background: transparent; color: var(--accent); text-decoration: underline; cursor: pointer; font: inherit; font-size: 11px; padding: 0 0 0 4px; }
   .dismissedlist .linkbtn { color: var(--text-muted); }
   .suggest { font-size: 12px; color: var(--text-muted); margin: 4px 0; }
+  .suggest.unregistered { color: var(--sev-fail); }
   .actions { display: flex; gap: 6px; align-items: center; margin: 8px -10px -8px; padding: 8px 10px; border-top: 1px solid var(--border-soft); background: var(--bg-sidebar); border-radius: 0 0 5px 5px; }
   button { font: inherit; font-size: 12px; padding: 2px 8px; }
   button:disabled { opacity: 0.5; cursor: not-allowed; }

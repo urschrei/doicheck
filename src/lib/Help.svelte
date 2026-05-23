@@ -58,6 +58,18 @@
           for that document and can be undone.</li>
       </ul>
 
+      <h3>DOIs that do not resolve</h3>
+      <ul>
+        <li>When a cited DOI is not on Crossref or DataCite, doi.org is asked whether it
+          is registered at all. A DOI registered with another agency is reported as valid
+          with a working doi.org link; a DOI that is not registered anywhere is flagged in
+          red.</li>
+        <li>For an unregistered DOI, a bibliographic search looks for the work by its
+          title and authors: a match is offered as the likely correct DOI, while no match
+          is noted so you can check the reference exists. This is a prompt to verify, not a
+          verdict.</li>
+      </ul>
+
       <h3>Re-checking, cache and offline</h3>
       <ul>
         <li>Resolved DOIs are cached locally and shared across documents, so each DOI is

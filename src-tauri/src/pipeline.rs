@@ -4,7 +4,10 @@ use crate::cache::{DoiCache, QueryKey, SearchCache};
 use crate::compare::{Metadata, compare};
 use crate::crossref::{CrossrefClient, LookupError, SearchHit};
 use crate::datacite::DataCiteClient;
-use crate::model::{CheckResult, CheckedEntry, EntryOutcome, Progress, Source, SuggestedDoi};
+use crate::model::{
+    CheckResult, CheckedEntry, EntryOutcome, Progress, Registration, Source, SuggestedDoi,
+};
+use crate::registration::RegistrationClient;
 use crate::text::token_coverage;
 use futures::stream::{self, StreamExt};
 use std::collections::HashSet;
@@ -57,6 +60,8 @@ fn unresolved_outcome(doi: &str, network_error: bool) -> EntryOutcome {
     EntryOutcome::Unresolved {
         doi: doi.to_string(),
         network_error,
+        registration: Registration::Unknown,
+        suggested: None,
     }
 }
 
@@ -137,7 +142,8 @@ async fn resolve_doi_outcome(
     raw_text: &str,
     client: &CrossrefClient,
     datacite: &DataCiteClient,
-    cache: &(impl DoiCache + Sync),
+    registration: &RegistrationClient,
+    cache: &(impl DoiCache + SearchCache + Sync),
 ) -> EntryOutcome {
     let key = crate::doi::Doi::new(doi);
     match fetch_cached(cache, Source::Crossref, &key, client.resolve_json(doi)).await {
@@ -154,8 +160,70 @@ async fn resolve_doi_outcome(
             resolved_outcome(doi, raw_text, &meta, from_cache, Source::DataCite, false)
         }
         Err(LookupError::Network(_)) => unresolved_outcome(doi, true),
-        Err(LookupError::NotFound) => unresolved_outcome(doi, false),
+        // Neither agency has the DOI. Diagnose: ask doi.org whether the DOI is
+        // registered at all (telling a non-DOI miscast as one from a valid DOI
+        // those two agencies do not index), and search by reference text for the
+        // record it should point to. A registration-check failure leaves the
+        // status `Unknown` rather than wrongly claiming the DOI is unregistered.
+        Err(LookupError::NotFound) => {
+            let reg = registration
+                .check(doi)
+                .await
+                .unwrap_or(Registration::Unknown);
+            let (suggested, _) = search_suggestion(raw_text, client, datacite, cache).await;
+            EntryOutcome::Unresolved {
+                doi: doi.to_string(),
+                network_error: false,
+                registration: reg,
+                suggested,
+            }
+        }
     }
+}
+
+/// Cache-first bibliographic search for a reference's text across Crossref then
+/// DataCite, returning the best suggestion (when title coverage meets the
+/// threshold) and whether it was served from the search cache. Each agency's hit
+/// seeds its own DOI cache via `suggestion_from_hit`. Shared by the no-DOI path
+/// and the unresolved-DOI path, which both ask "what record does this reference
+/// describe?".
+async fn search_suggestion(
+    raw_text: &str,
+    client: &CrossrefClient,
+    datacite: &DataCiteClient,
+    cache: &(impl DoiCache + SearchCache + Sync),
+) -> (Option<SuggestedDoi>, bool) {
+    let key = QueryKey::new(raw_text);
+    if let Some(json) = cache.search_get(&key) {
+        return (serde_json::from_str::<SuggestedDoi>(&json).ok(), true);
+    }
+    // Crossref first; if it offers no suggestion (no good match, no hit, or a
+    // search failure), fall back to DataCite.
+    let crossref_suggestion = match client.search(raw_text).await {
+        Ok(Some(hit)) if !hit.doi.is_empty() => {
+            suggestion_from_hit(hit, raw_text, Source::Crossref, cache)
+        }
+        Ok(Some(_)) | Ok(None) | Err(LookupError::NotFound) | Err(LookupError::Network(_)) => None,
+    };
+    let suggested = match crossref_suggestion {
+        Some(s) => Some(s),
+        None => match datacite.search(raw_text).await {
+            Ok(Some(hit)) if !hit.doi.is_empty() => {
+                suggestion_from_hit(hit, raw_text, Source::DataCite, cache)
+            }
+            Ok(Some(_)) | Ok(None) | Err(LookupError::NotFound) | Err(LookupError::Network(_)) => {
+                None
+            }
+        },
+    };
+    // Cache only a positive suggestion (>=80% match); a near-miss is left
+    // uncached so a later run can try again.
+    if let Some(s) = &suggested
+        && let Ok(json) = serde_json::to_string(s)
+    {
+        cache.search_put(&key, &json);
+    }
+    (suggested, false)
 }
 
 /// Per-entry logic: resolve a DOI or search for one, returning an `EntryOutcome`.
@@ -163,50 +231,17 @@ async fn outcome_for_entry(
     entry: &crate::model::ReferenceEntry,
     client: &CrossrefClient,
     datacite: &DataCiteClient,
+    registration: &RegistrationClient,
     cache: &(impl DoiCache + SearchCache + Sync),
 ) -> EntryOutcome {
     match &entry.doi {
-        Some(doi) => resolve_doi_outcome(doi, &entry.raw_text, client, datacite, cache).await,
+        Some(doi) => {
+            resolve_doi_outcome(doi, &entry.raw_text, client, datacite, registration, cache).await
+        }
         None => {
-            // Search is keyed by the reference text. Reuse a cached suggestion
-            // before hitting the network.
-            let key = QueryKey::new(&entry.raw_text);
-            if let Some(json) = cache.search_get(&key) {
-                let suggested = serde_json::from_str::<SuggestedDoi>(&json).ok();
-                return finalise_no_doi(suggested, true, &entry.raw_text, cache);
-            }
-            // Crossref first; if it offers no suggestion (no good match, no hit,
-            // or a search failure), fall back to DataCite. Each agency's hit seeds
-            // its own DOI cache via `suggestion_from_hit`.
-            let crossref_suggestion = match client.search(&entry.raw_text).await {
-                Ok(Some(hit)) if !hit.doi.is_empty() => {
-                    suggestion_from_hit(hit, &entry.raw_text, Source::Crossref, cache)
-                }
-                Ok(Some(_))
-                | Ok(None)
-                | Err(LookupError::NotFound)
-                | Err(LookupError::Network(_)) => None,
-            };
-            let suggested = match crossref_suggestion {
-                Some(s) => Some(s),
-                None => match datacite.search(&entry.raw_text).await {
-                    Ok(Some(hit)) if !hit.doi.is_empty() => {
-                        suggestion_from_hit(hit, &entry.raw_text, Source::DataCite, cache)
-                    }
-                    Ok(Some(_))
-                    | Ok(None)
-                    | Err(LookupError::NotFound)
-                    | Err(LookupError::Network(_)) => None,
-                },
-            };
-            // Cache only a positive suggestion (>=80% match); a near-miss is left
-            // uncached so a later run can try again.
-            if let Some(s) = &suggested
-                && let Ok(json) = serde_json::to_string(s)
-            {
-                cache.search_put(&key, &json);
-            }
-            finalise_no_doi(suggested, false, &entry.raw_text, cache)
+            let (suggested, from_cache) =
+                search_suggestion(&entry.raw_text, client, datacite, cache).await;
+            finalise_no_doi(suggested, from_cache, &entry.raw_text, cache)
         }
     }
 }
@@ -240,7 +275,8 @@ pub async fn recheck_failures(
     mut result: CheckResult,
     client: &CrossrefClient,
     datacite: &DataCiteClient,
-    cache: &(impl crate::cache::DoiCache + Sync),
+    registration: &RegistrationClient,
+    cache: &(impl DoiCache + SearchCache + Sync),
     concurrency: usize,
     mut progress: impl FnMut(Progress),
 ) -> CheckResult {
@@ -256,6 +292,7 @@ pub async fn recheck_failures(
             EntryOutcome::Unresolved {
                 network_error: true,
                 doi,
+                ..
             } => Some((i, doi.clone(), ce.entry.raw_text.clone())),
             EntryOutcome::Unresolved {
                 network_error: false,
@@ -284,7 +321,7 @@ pub async fn recheck_failures(
     let mut tasks = stream::iter(jobs.into_iter().map(|(i, doi, raw_text)| async move {
         (
             i,
-            resolve_doi_outcome(&doi, &raw_text, client, datacite, cache).await,
+            resolve_doi_outcome(&doi, &raw_text, client, datacite, registration, cache).await,
         )
     }))
     .buffer_unordered(concurrency.max(1));
@@ -314,6 +351,7 @@ pub async fn run(
     text: &str,
     client: &CrossrefClient,
     datacite: &DataCiteClient,
+    registration: &RegistrationClient,
     cache: &(impl DoiCache + SearchCache + Sync),
     concurrency: usize,
     mut progress: impl FnMut(Progress),
@@ -345,7 +383,12 @@ pub async fn run(
     for indices in [first_pass, dup_pass] {
         let mut tasks = stream::iter(indices.into_iter().map(|i| {
             let entry = entries[i].clone();
-            async move { (i, outcome_for_entry(&entry, client, datacite, cache).await) }
+            async move {
+                (
+                    i,
+                    outcome_for_entry(&entry, client, datacite, registration, cache).await,
+                )
+            }
         }))
         .buffer_unordered(limit);
         while let Some((i, outcome)) = tasks.next().await {
@@ -411,6 +454,7 @@ mod tests {
             .await;
         let client = CrossrefClient::with_base("", server.uri());
         let datacite = DataCiteClient::with_base("", server.uri());
+        let registration = RegistrationClient::with_base("", server.uri());
         let cache = MemoryCache::default();
 
         let text = "References\n[1] Smith J (2020). A Study of Widgets. 10.1000/abc";
@@ -422,6 +466,7 @@ mod tests {
             text,
             &client,
             &datacite,
+            &registration,
             &cache,
             5,
             |p| updates.push(p.done),
@@ -461,6 +506,7 @@ mod tests {
             .await;
         let client = CrossrefClient::with_base("", crossref.uri());
         let datacite = DataCiteClient::with_base("", datacite_server.uri());
+        let registration = RegistrationClient::with_base("", datacite_server.uri());
         let cache = MemoryCache::default();
 
         let text = "References\nLee, K. (2021). A Dataset. https://doi.org/10.5281/zenodo.99";
@@ -471,6 +517,7 @@ mod tests {
             text,
             &client,
             &datacite,
+            &registration,
             &cache,
             5,
             |_| {},
@@ -500,6 +547,7 @@ mod tests {
             .await;
         let client = CrossrefClient::with_base("", crossref.uri());
         let datacite = DataCiteClient::with_base("", datacite_server.uri());
+        let registration = RegistrationClient::with_base("", datacite_server.uri());
         let cache = MemoryCache::default();
 
         let text = "References\nGhost, A. (2099). Nonexistent. https://doi.org/10.9999/nope";
@@ -510,6 +558,7 @@ mod tests {
             text,
             &client,
             &datacite,
+            &registration,
             &cache,
             5,
             |_| {},
@@ -522,6 +571,125 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// A server that 404s both resolve endpoints, answers the doi.org
+    /// registration check with `ra`, and returns `search` for a bibliographic
+    /// search. One server stands in for Crossref, DataCite, and doi.org, since
+    /// each uses a distinct path.
+    async fn unresolved_server(ra: serde_json::Value, search: serde_json::Value) -> MockServer {
+        let srv = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"/works/.+"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&srv)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"/dois/.+"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&srv)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"/doiRA/.+"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(ra))
+            .mount(&srv)
+            .await;
+        Mock::given(method("GET"))
+            .and(query_param("rows", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(search))
+            .mount(&srv)
+            .await;
+        srv
+    }
+
+    async fn unresolved_outcome_for(srv: &MockServer, text: &str) -> EntryOutcome {
+        let client = CrossrefClient::with_base("", srv.uri());
+        let datacite = DataCiteClient::with_base("", srv.uri());
+        let registration = RegistrationClient::with_base("", srv.uri());
+        let cache = MemoryCache::default();
+        let result = run(
+            "a.pdf".into(),
+            "fp".into(),
+            "now".into(),
+            text,
+            &client,
+            &datacite,
+            &registration,
+            &cache,
+            5,
+            |_| {},
+        )
+        .await;
+        result.entries.into_iter().next().unwrap().outcome
+    }
+
+    #[tokio::test]
+    async fn unregistered_doi_with_no_match_is_flagged() {
+        let srv = unresolved_server(
+            serde_json::json!([{ "status": "DOI does not exist" }]),
+            serde_json::json!({ "message": { "items": [] } }),
+        )
+        .await;
+        let text = "References\nGhost A. Nonexistent thing. https://doi.org/10.9999/nope";
+        match unresolved_outcome_for(&srv, text).await {
+            EntryOutcome::Unresolved {
+                network_error,
+                registration,
+                suggested,
+                ..
+            } => {
+                assert!(!network_error);
+                assert_eq!(registration, Registration::Unregistered);
+                assert!(suggested.is_none());
+            }
+            other => panic!("expected unresolved, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn unregistered_doi_with_a_title_match_offers_the_match() {
+        let srv = unresolved_server(
+            serde_json::json!([{ "status": "DOI does not exist" }]),
+            serde_json::json!({ "message": { "items": [
+                { "title": ["A Study of Widgets"], "DOI": "10.1000/xyz" }
+            ]}}),
+        )
+        .await;
+        // The cited DOI is broken but the reference's title matches a real record,
+        // so the correct DOI is offered rather than the entry being substituted.
+        let text = "References\nSmith J. A Study of Widgets. Journal of Widgets. https://doi.org/10.9999/nope";
+        match unresolved_outcome_for(&srv, text).await {
+            EntryOutcome::Unresolved {
+                registration,
+                suggested: Some(s),
+                ..
+            } => {
+                assert_eq!(registration, Registration::Unregistered);
+                assert_eq!(s.doi, "10.1000/xyz");
+            }
+            other => panic!("expected unresolved with a suggestion, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn doi_registered_with_another_agency_is_named() {
+        let srv = unresolved_server(
+            serde_json::json!([{ "RA": "mEDRA" }]),
+            serde_json::json!({ "message": { "items": [] } }),
+        )
+        .await;
+        let text = "References\nRossi M. Un articolo. https://doi.org/10.9999/medra";
+        match unresolved_outcome_for(&srv, text).await {
+            EntryOutcome::Unresolved {
+                registration,
+                suggested,
+                ..
+            } => {
+                assert_eq!(registration, Registration::Agency("mEDRA".to_string()));
+                assert!(suggested.is_none());
+            }
+            other => panic!("expected unresolved, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -540,6 +708,7 @@ mod tests {
             .await;
         let client = CrossrefClient::with_base("", server.uri());
         let datacite = DataCiteClient::with_base("", server.uri());
+        let registration = RegistrationClient::with_base("", server.uri());
         let cache = MemoryCache::default();
 
         let text = "References\nSmith J. A Study of Widgets. Journal of Widgets.";
@@ -550,6 +719,7 @@ mod tests {
             text,
             &client,
             &datacite,
+            &registration,
             &cache,
             5,
             |_| {},
@@ -595,6 +765,7 @@ mod tests {
             .await;
         let client = CrossrefClient::with_base("", crossref.uri());
         let datacite = DataCiteClient::with_base("", datacite_server.uri());
+        let registration = RegistrationClient::with_base("", datacite_server.uri());
         let cache = MemoryCache::default();
 
         let text = "References\nSmith J. A Study of Widgets. Journal of Widgets.";
@@ -605,6 +776,7 @@ mod tests {
             text,
             &client,
             &datacite,
+            &registration,
             &cache,
             5,
             |_| {},
@@ -642,6 +814,7 @@ mod tests {
             .await;
         let client = CrossrefClient::with_base("", server.uri());
         let datacite = DataCiteClient::with_base("", server.uri());
+        let registration = RegistrationClient::with_base("", server.uri());
         let cache = MemoryCache::default();
         let text = "References\nSmith J. A Study of Widgets. Journal of Widgets.";
 
@@ -652,6 +825,7 @@ mod tests {
             text,
             &client,
             &datacite,
+            &registration,
             &cache,
             5,
             |_| {},
@@ -677,6 +851,7 @@ mod tests {
             text,
             &client,
             &datacite,
+            &registration,
             &cache,
             5,
             |_| {},
@@ -718,6 +893,7 @@ mod tests {
             .await;
         let client = CrossrefClient::with_base("", server.uri());
         let datacite = DataCiteClient::with_base("", server.uri());
+        let registration = RegistrationClient::with_base("", server.uri());
         let cache = MemoryCache::default();
         let text = "References\nSmith J. A Study of Widgets. Journal of Widgets.";
         let _ = run(
@@ -727,6 +903,7 @@ mod tests {
             text,
             &client,
             &datacite,
+            &registration,
             &cache,
             5,
             |_| {},
@@ -759,6 +936,7 @@ mod tests {
             .await;
         let client = CrossrefClient::with_base("", server.uri());
         let datacite = DataCiteClient::with_base("", server.uri());
+        let registration = RegistrationClient::with_base("", server.uri());
         let cache = MemoryCache::default();
 
         // No "References" heading: the fallback window must carry the entry text,
@@ -771,6 +949,7 @@ mod tests {
             text,
             &client,
             &datacite,
+            &registration,
             &cache,
             5,
             |_| {},
@@ -798,6 +977,7 @@ mod tests {
         );
         let client = CrossrefClient::with_base("", server.uri());
         let datacite = DataCiteClient::with_base("", server.uri());
+        let registration = RegistrationClient::with_base("", server.uri());
         let text = "References\n[1] Smith J (2020). A Study of Widgets. 10.1000/abc";
         let result = run(
             "a.pdf".into(),
@@ -806,6 +986,7 @@ mod tests {
             text,
             &client,
             &datacite,
+            &registration,
             &cache,
             5,
             |_| {},
@@ -829,6 +1010,7 @@ mod tests {
             .await;
         let client = CrossrefClient::with_base("", server.uri());
         let datacite = DataCiteClient::with_base("", server.uri());
+        let registration = RegistrationClient::with_base("", server.uri());
         let cache = MemoryCache::default();
         let text = "References\n[1] Smith J (2020). A Study of Widgets. 10.1000/abc";
         let _ = run(
@@ -838,6 +1020,7 @@ mod tests {
             text,
             &client,
             &datacite,
+            &registration,
             &cache,
             5,
             |_| {},
@@ -860,6 +1043,7 @@ mod tests {
             .await;
         let client = CrossrefClient::with_base("", server.uri());
         let datacite = DataCiteClient::with_base("", server.uri());
+        let registration = RegistrationClient::with_base("", server.uri());
         let cache = MemoryCache::default();
         let text = "References\n[1] Smith J (2020). A Study of Widgets. 10.1000/abc";
         let result = run(
@@ -869,6 +1053,7 @@ mod tests {
             text,
             &client,
             &datacite,
+            &registration,
             &cache,
             5,
             |_| {},
@@ -897,6 +1082,7 @@ mod tests {
             .await;
         let client = CrossrefClient::with_base("", server.uri());
         let datacite = DataCiteClient::with_base("", server.uri());
+        let registration = RegistrationClient::with_base("", server.uri());
         let cache = MemoryCache::default();
 
         let result = CheckResult {
@@ -914,6 +1100,8 @@ mod tests {
                     outcome: EntryOutcome::Unresolved {
                         doi: "10.1000/fail".into(),
                         network_error: true,
+                        registration: Registration::Unknown,
+                        suggested: None,
                     },
                     llm_source: None,
                 },
@@ -935,7 +1123,8 @@ mod tests {
             ],
         };
 
-        let updated = recheck_failures(result, &client, &datacite, &cache, 5, |_| {}).await;
+        let updated =
+            recheck_failures(result, &client, &datacite, &registration, &cache, 5, |_| {}).await;
         // The transient failure is now resolved.
         assert!(matches!(
             updated.entries[0].outcome,
@@ -961,6 +1150,7 @@ mod tests {
             .await;
         let client = CrossrefClient::with_base("", server.uri());
         let datacite = DataCiteClient::with_base("", server.uri());
+        let registration = RegistrationClient::with_base("", server.uri());
         let cache = MemoryCache::default();
         let text = "References\n\
 [1] Smith J (2020). A Study of Widgets. 10.1000/dup\n\
@@ -972,6 +1162,7 @@ mod tests {
             text,
             &client,
             &datacite,
+            &registration,
             &cache,
             5,
             |_| {},
@@ -1005,6 +1196,7 @@ mod tests {
             .await;
         let client = CrossrefClient::with_base("", server.uri());
         let datacite = DataCiteClient::with_base("", server.uri());
+        let registration = RegistrationClient::with_base("", server.uri());
         let cache = MemoryCache::default();
         let text = "References\nSmith J (2020). A Study of Widgets. Journal of Widgets.";
         let result = run(
@@ -1014,6 +1206,7 @@ mod tests {
             text,
             &client,
             &datacite,
+            &registration,
             &cache,
             5,
             |_| {},
@@ -1054,6 +1247,7 @@ mod tests {
             .await;
         let client = CrossrefClient::with_base("", server.uri());
         let datacite = DataCiteClient::with_base("", server.uri());
+        let registration = RegistrationClient::with_base("", server.uri());
         let cache = MemoryCache::default();
         // Title fully present, but the reference cites the wrong year.
         let text = "References\nSmith J (1999). A Study of Widgets. Journal of Widgets.";
@@ -1064,6 +1258,7 @@ mod tests {
             text,
             &client,
             &datacite,
+            &registration,
             &cache,
             5,
             |_| {},
@@ -1105,6 +1300,7 @@ mod tests {
             .await;
         let client = CrossrefClient::with_base("", server.uri());
         let datacite = DataCiteClient::with_base("", server.uri());
+        let registration = RegistrationClient::with_base("", server.uri());
         let cache = MemoryCache::default();
         let text = "References\nSmith J (2020). A Study of Widgets. Journal of Widgets.";
 
@@ -1115,6 +1311,7 @@ mod tests {
             text,
             &client,
             &datacite,
+            &registration,
             &cache,
             5,
             |_| {},
@@ -1137,6 +1334,7 @@ mod tests {
             text,
             &client,
             &datacite,
+            &registration,
             &cache,
             5,
             |_| {},
@@ -1172,6 +1370,7 @@ mod tests {
             .await;
         let client = CrossrefClient::with_base("", server.uri());
         let datacite = DataCiteClient::with_base("", server.uri());
+        let registration = RegistrationClient::with_base("", server.uri());
         let cache = MemoryCache::default();
         let text = "References\nSmith J. A Study of Widgets. Journal of Widgets.";
         let result = run(
@@ -1181,6 +1380,7 @@ mod tests {
             text,
             &client,
             &datacite,
+            &registration,
             &cache,
             5,
             |_| {},
@@ -1239,6 +1439,7 @@ mod tests {
             .await;
         let client = CrossrefClient::with_base("", server.uri());
         let datacite = DataCiteClient::with_base("", server.uri());
+        let registration = RegistrationClient::with_base("", server.uri());
         let cache = MemoryCache::default();
 
         // A reference whose raw text contains a ChatGPT tracking parameter.
@@ -1251,6 +1452,7 @@ mod tests {
             text,
             &client,
             &datacite,
+            &registration,
             &cache,
             5,
             |_| {},
