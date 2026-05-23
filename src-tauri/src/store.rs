@@ -528,7 +528,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{CheckedEntry, Discrepancy, EntryOutcome, ReferenceEntry};
+    use crate::model::{CheckedEntry, Discrepancy, EntryOutcome, ReferenceEntry, Registration};
 
     fn sample() -> CheckResult {
         CheckResult {
@@ -758,6 +758,8 @@ mod tests {
             outcome: EntryOutcome::Unresolved {
                 doi: "10.1/a".into(),
                 network_error: true,
+                registration: Registration::Unknown,
+                suggested: None,
             },
             llm_source: None,
         }];
@@ -781,6 +783,8 @@ mod tests {
             outcome: EntryOutcome::Unresolved {
                 doi: "10.1/a".into(),
                 network_error: false,
+                registration: Registration::Unknown,
+                suggested: None,
             },
             llm_source: None,
         }];

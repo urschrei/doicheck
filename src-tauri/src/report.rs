@@ -1,6 +1,6 @@
 //! Rendering a CheckResult to the canonical plain-text report.
 
-use crate::model::{CheckResult, CheckedEntry, EntryOutcome};
+use crate::model::{CheckResult, CheckedEntry, EntryOutcome, Registration};
 use std::fmt::Write;
 
 /// A single-line, length-limited identifier for a reference, derived from its
@@ -149,16 +149,48 @@ pub fn render(result: &CheckResult) -> String {
                 }
                 write_marker(&mut s, &indent, e);
             }
-            EntryOutcome::Unresolved { doi, network_error } => {
+            EntryOutcome::Unresolved {
+                doi,
+                network_error,
+                registration,
+                suggested,
+            } => {
                 any_disc = true;
-                let reason = if *network_error {
-                    "could not be checked — retry needed"
-                } else {
-                    "DOI not found on Crossref or DataCite"
-                };
                 let indent = entry_indent(e.entry.ordinal);
                 let _ = writeln!(s, "  [{}] {}", e.entry.ordinal, snippet(&e.entry.raw_text));
-                let _ = writeln!(s, "{indent}{}  {}", doi, reason);
+                if *network_error {
+                    let _ = writeln!(s, "{indent}{doi}  could not be checked — retry needed");
+                } else {
+                    match registration {
+                        Registration::Agency(ra) => {
+                            let _ = writeln!(
+                                s,
+                                "{indent}{doi}  registered with {ra}; not indexed by Crossref or DataCite (https://doi.org/{doi})"
+                            );
+                        }
+                        Registration::Unregistered => match suggested {
+                            Some(sug) => {
+                                let _ = writeln!(
+                                    s,
+                                    "{indent}{doi}  not a registered DOI; closest {} match {} ({}% title)",
+                                    sug.source.label(),
+                                    sug.doi,
+                                    sug.title_match
+                                );
+                            }
+                            None => {
+                                let _ = writeln!(
+                                    s,
+                                    "{indent}{doi}  not a registered DOI; no record matches this reference's title or authors — verify it exists"
+                                );
+                            }
+                        },
+                        Registration::Unknown => {
+                            let _ =
+                                writeln!(s, "{indent}{doi}  DOI not found on Crossref or DataCite");
+                        }
+                    }
+                }
                 write_marker(&mut s, &indent, e);
             }
             // A resolved-but-clean entry or a no-DOI entry only appears in this
@@ -231,7 +263,9 @@ pub fn render(result: &CheckResult) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{CheckedEntry, Discrepancy, ReferenceEntry, Source, SuggestedDoi};
+    use crate::model::{
+        CheckedEntry, Discrepancy, ReferenceEntry, Registration, Source, SuggestedDoi,
+    };
 
     #[test]
     fn renders_summary_discrepancies_and_missing() {
@@ -360,6 +394,8 @@ mod tests {
                     outcome: EntryOutcome::Unresolved {
                         doi: "10.3/www".into(),
                         network_error: true,
+                        registration: Registration::Unknown,
+                        suggested: None,
                     },
                     llm_source: None,
                 },
@@ -372,6 +408,8 @@ mod tests {
                     outcome: EntryOutcome::Unresolved {
                         doi: "10.2/zzz".into(),
                         network_error: false,
+                        registration: Registration::Unknown,
+                        suggested: None,
                     },
                     llm_source: None,
                 },
@@ -390,6 +428,64 @@ mod tests {
         // Two-line layout: each detail sits on its own continuation line.
         assert!(text.contains("10.3/www  could not be checked — retry needed"));
         assert!(text.contains("10.2/zzz  DOI not found on Crossref"));
+    }
+
+    #[test]
+    fn renders_registration_diagnosis_for_unresolved_dois() {
+        let unres = |ordinal, doi: &str, registration, suggested| CheckedEntry {
+            entry: ReferenceEntry {
+                ordinal,
+                raw_text: format!("Entry {ordinal}."),
+                doi: Some(doi.into()),
+            },
+            outcome: EntryOutcome::Unresolved {
+                doi: doi.into(),
+                network_error: false,
+                registration,
+                suggested,
+            },
+            llm_source: None,
+        };
+        let result = CheckResult {
+            filename: "x.pdf".into(),
+            fingerprint: "fp".into(),
+            run_at: "now".into(),
+            bibliography_detected: true,
+            entries: vec![
+                unres(1, "10.2307/26428370", Registration::Unregistered, None),
+                unres(
+                    2,
+                    "10.1/typo",
+                    Registration::Unregistered,
+                    Some(SuggestedDoi {
+                        doi: "10.1/correct".into(),
+                        title_match: 97,
+                        source: Source::Crossref,
+                    }),
+                ),
+                unres(
+                    3,
+                    "10.3280/medra",
+                    Registration::Agency("mEDRA".into()),
+                    None,
+                ),
+            ],
+        };
+        let text = render(&result);
+        assert!(
+            text.contains("10.2307/26428370  not a registered DOI; no record matches"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "10.1/typo  not a registered DOI; closest Crossref match 10.1/correct (97% title)"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("10.3280/medra  registered with mEDRA; not indexed by Crossref or DataCite (https://doi.org/10.3280/medra)"),
+            "{text}"
+        );
     }
 
     #[test]

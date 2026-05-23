@@ -5,6 +5,21 @@ All notable changes to this project are documented here. The format is based on
 [Semantic Versioning](https://semver.org/). Release-only version bumps are
 omitted.
 
+## [Unreleased]
+
+- Diagnose a DOI that resolves on neither Crossref nor DataCite by asking
+  doi.org whether it is registered at all. A DOI registered with another agency
+  (mEDRA, JaLC, and others doicheck does not query) is reported as valid, with a
+  working doi.org link and an enabled "open DOI"; a DOI that is not registered
+  anywhere is flagged in red, distinguishing a non-DOI identifier miscast as one
+  (such as a JSTOR stable id) from a metadata-coverage gap. For an unregistered
+  DOI a bibliographic search looks up the work by title and authors: a match is
+  offered as the likely correct DOI, and where none is found the entry's card is
+  bordered red with a hedged prompt to verify the reference exists rather than any
+  accusation. The
+  registration check runs only on the failure path, and a check that itself fails
+  leaves the status unknown rather than guessing.
+
 ## [0.5.1] - 2026-05-23
 
 - Segment MLA/Chicago author-title reference lists. Previously the entry-start
