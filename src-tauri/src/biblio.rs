@@ -50,6 +50,25 @@ static AUTHOR_START_RE: LazyLock<Regex> = LazyLock::new(|| {
 static YEAR_PAREN_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\((?:19|20)\d{2}[a-z]?\)").unwrap());
 
+// An MLA/Chicago opener whose title is quoted: the author block ends in a full
+// stop and is followed (near the start of the line) by an opening quote. This
+// catches "Surname, Given Names. "Title."" and corporate authors ("IMD. "..."")
+// that carry no parenthesised year and spell given names out in full, so neither
+// the parenthesised-year branch nor [`AUTHOR_START_RE`] applies. A wrapped
+// continuation carries the *closing* quote (U+201D), which is excluded here.
+static QUOTED_TITLE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new("^\\p{Lu}.{0,78}?\\.\\s+[\"\u{201c}]").unwrap());
+
+// An MLA/Chicago opener whose title is *not* quoted (a book or report): a
+// surname, a comma, one or more capitalised given-name tokens ending in a full
+// stop, then a capitalised title word. The given tokens are space-separated and
+// cannot cross a comma, so a wrapped journal/place line such as "World Planning
+// Congress, Toronto, ON, Canada, 2024." is not mistaken for an opener.
+static AUTHOR_TITLE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\p{Lu}[\p{L}'’\- ]*,\s+(?:\p{Lu}[\p{L}'’.\-]*\s+)*\p{Lu}[\p{L}'’.\-]*\.\s+\p{Lu}")
+        .unwrap()
+});
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct Bibliography {
     pub detected: bool,
@@ -70,19 +89,34 @@ pub fn section_after_heading(text: &str) -> Option<&str> {
 }
 
 /// A line begins a new entry if it carries a numbered marker, or it looks like
-/// an author-date opening: an uppercase start with a parenthesised year near the
-/// start, or an author list whose year is unparenthesised (see
-/// [`AUTHOR_START_RE`]).
+/// an author-date opening (an uppercase start with a parenthesised year near the
+/// start, or an author list whose year is unparenthesised; see
+/// [`AUTHOR_START_RE`]), or an MLA/Chicago author-title opening (see
+/// [`QUOTED_TITLE_RE`] and [`AUTHOR_TITLE_RE`]).
 pub(crate) fn is_entry_start(line: &str) -> bool {
     if NUMBER_MARKER_RE.is_match(line) {
         return true;
     }
     let trimmed = line.trim_start();
     let begins_upper = trimmed.chars().next().is_some_and(|c| c.is_uppercase());
-    if begins_upper && YEAR_PAREN_RE.find(trimmed).is_some_and(|m| m.start() <= 80) {
+    // An author-date opener with a parenthesised year near the start. The text
+    // before the year must be author-like (carry no digits): a wrapped journal
+    // line such as "Top. 214, 481–518 (2012)." has a page range before the year
+    // and is a continuation, not a new entry.
+    if begins_upper
+        && YEAR_PAREN_RE.find(trimmed).is_some_and(|m| {
+            m.start() <= 80 && !trimmed[..m.start()].bytes().any(|b| b.is_ascii_digit())
+        })
+    {
         return true;
     }
-    AUTHOR_START_RE.is_match(trimmed)
+    if AUTHOR_START_RE.is_match(trimmed) {
+        return true;
+    }
+    // MLA/Chicago openers, which carry no parenthesised year and spell given names
+    // out in full: a quoted title after the author block, or (for an unquoted book
+    // or report) "Surname, Given Names. Capitalised Title".
+    QUOTED_TITLE_RE.is_match(trimmed) || AUTHOR_TITLE_RE.is_match(trimmed)
 }
 
 /// Split a bibliography section into entries by detecting entry starts and
@@ -408,6 +442,76 @@ Robotics, 305–342.\n";
             .expect("HAQUE should be one entry");
         assert!(haque.raw_text.contains("DERGUECH"));
         assert!(haque.raw_text.contains("305"));
+    }
+
+    // MLA/Chicago author-title references: the author's given name is spelled out
+    // in full and the year is unparenthesised and appears late, so the only entry
+    // boundary signal is the author block followed by a (usually quoted) title.
+    // Modelled on a real term paper whose list collapsed into one clump (only the
+    // first reference, with initials, split off). Curly quotes as pdfium emits.
+    const MLA_AUTHOR_TITLE: &str = "References\n\
+Arnstein, Sherry R. \u{201c}A Ladder of Citizen Participation.\u{201d} Journal of the American Institute of\n\
+Planners, vol. 35, no. 4, 1969, pp. 216\u{2013}24,\n\
+https://doi.org/10.1080/01944366908977225.\n\
+Batty, M., Axhausen, K.W., Giannotti, F. et al. Smart cities of the future. Eur. Phys. J. Spec.\n\
+Top. 214, 481\u{2013}518 (2012). https://doi.org/10.1140/epjst/e2012-01703-3\n\
+Chung, Hiu Fung. \u{201c}Changing Repertoires of Contention in Hong Kong: A Case Study on the\n\
+Anti-Extradition Bill Movement.\u{201d} China Perspectives, vol. 2020, no. 3, Sept. 2020,\n\
+pp. 57\u{2013}63, https://doi.org/10.4000/chinaperspectives.10476.\n\
+Cole, Alistair, and \u{c9}milie Tran. \u{201c}Trust and the Smart City: The Hong Kong Paradox.\u{201d} China\n\
+Perspectives, Sept. 2022, pp. 9\u{2013}20, https://doi.org/10.4000/chinaperspectives.14039.\n\
+Cugurullo, Federico. FRANKENSTEIN URBANISM: Eco, Smart and Autonomous Cities,\n\
+Artificial Intelligence and the End of the City. Routledge, 2021.\n\
+Vanolo, Alberto. \u{201c}Smartmentality: The Smart City as Disciplinary Strategy.\u{201d} Urban Studies,\n\
+vol. 51, no. 5, July 2014, pp. 883\u{2013}98, https://doi.org/10.1177/0042098013494427.\n";
+
+    #[test]
+    fn segments_mla_author_title_entries() {
+        let bib = detect(MLA_AUTHOR_TITLE);
+        assert!(bib.detected);
+        // One entry per reference: Arnstein, Batty, Chung, Cole, Cugurullo, Vanolo.
+        assert_eq!(bib.entries.len(), 6);
+
+        // The first reference (which precedes any initials-style opener) must not
+        // be dropped, and carries its DOI.
+        let arnstein = bib
+            .entries
+            .iter()
+            .find(|e| e.raw_text.contains("Arnstein"))
+            .expect("Arnstein should be its own entry");
+        assert_eq!(arnstein.doi.as_deref(), Some("10.1080/01944366908977225"));
+
+        // The Batty reference must stay whole: its wrapped "Top. 214, 481-518
+        // (2012)" continuation must not be mistaken for a new author-date entry.
+        let batty = bib
+            .entries
+            .iter()
+            .find(|e| e.raw_text.contains("Batty"))
+            .expect("Batty should be one entry");
+        assert!(batty.raw_text.contains("Top. 214"));
+        assert_eq!(batty.doi.as_deref(), Some("10.1140/epjst/e2012-01703-3"));
+
+        // Adjacent MLA references must not clump together.
+        let chung = bib
+            .entries
+            .iter()
+            .find(|e| e.raw_text.contains("Chung"))
+            .expect("Chung should be its own entry");
+        assert!(!chung.raw_text.contains("Cole"));
+        assert_eq!(
+            chung.doi.as_deref(),
+            Some("10.4000/chinaperspectives.10476")
+        );
+
+        // A book/report whose title is not quoted is still its own entry, and its
+        // wrapped continuation is not split off.
+        let cugurullo = bib
+            .entries
+            .iter()
+            .find(|e| e.raw_text.contains("Cugurullo"))
+            .expect("Cugurullo should be its own entry");
+        assert!(cugurullo.raw_text.contains("Routledge"));
+        assert!(!cugurullo.raw_text.contains("Vanolo"));
     }
 
     // A page footer that is not page-number shaped (an author name and an ID
