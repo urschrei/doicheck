@@ -22,7 +22,7 @@ jobs:
             rust_targets: ""
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Free disk space (Windows)
         if: runner.os == 'Windows'
@@ -46,7 +46,7 @@ jobs:
           # A locked file blocking a deletion must not fail the release.
           exit 0
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -80,7 +80,7 @@ jobs:
           tar -xzf $env:TEMP\pdfium.tgz -C $env:TEMP bin/pdfium.dll
           Copy-Item $env:TEMP\bin\pdfium.dll src-tauri\pdfium\pdfium.dll
 
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@v1
         env:
           # Prefer a PAT (RELEASE_TOKEN) if set; fall back to the workflow token.
           # A PAT isn't subject to the GITHUB_TOKEN workflow-permission policy,
